@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document</title>
+</head>
+<body>
+  <h1>
+    Frontend to Backend Test
+  </h1>
+
+  <input id="msg" placeholder="Enter something">
+  <button onclick="send()">Send</button>
+
+  <p id="response"></p>
+
+  <script>
+    async function send() {
+      const text = document.getElementById('msg').value;
+
+      const res = await fetch("http://127.0.0.1:8000/hello", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text })
+      });
+
+      const data = await res.json();
+
+      document.getElementById('response').innerText = data.reply;
+    }
+  </script>
+</body>
+</html>
