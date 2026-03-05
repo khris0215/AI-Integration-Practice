@@ -1,0 +1,18 @@
+# Python virtual environment
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local RAG / DB / data
+chroma/
+data/
+uploads/
+
+# Environment variables
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
