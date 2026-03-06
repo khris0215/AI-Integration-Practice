@@ -55,57 +55,58 @@
         </aside>
 
         <div class="flex-1 flex flex-col">
-            <header class="lg:hidden px-6 py-6 border-b border-slate-200/70 dark:border-white/10">
+            <header class="lg:hidden px-4 sm:px-6 py-5 border-b border-slate-200/70 dark:border-white/10">
                 <div class="flex items-center justify-between">
                     <a href="#console" class="flex items-center gap-3 font-semibold">
                         <img src="assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/70 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
                         PromptBridge AI
                     </a>
-                    <div class="flex items-center gap-2 text-sm">
+                    <div class="flex items-center gap-2 text-xs sm:text-sm flex-wrap justify-end">
                         <a href="pages/workflow.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Workflow</a>
                         <a href="pages/security.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Security</a>
+                        <a href="pages/pricing.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Pricing</a>
                     </div>
                 </div>
             </header>
 
-            <main class="flex-1 px-6 lg:px-16 py-10">
-                <section id="console" class="grid gap-6 lg:gap-10 lg:grid-cols-[minmax(0,2fr)_minmax(0,0.6fr)] items-start">
-                    <div class="glass-panel rounded-[2.5rem] p-6 md:p-12 card-shadow space-y-8 lg:space-y-10 min-h-[70vh] lg:min-h-[85vh] flex flex-col">
+            <main class="flex-1 px-4 sm:px-6 lg:px-16 py-8 lg:py-12">
+                <section id="console" class="grid gap-6 sm:gap-8 xl:gap-12 2xl:gap-16 items-stretch max-w-6xl 2xl:max-w-7xl mx-auto w-full xl:grid-cols-[minmax(0,2.4fr)_minmax(220px,0.6fr)] 2xl:grid-cols-[minmax(0,2.8fr)_minmax(260px,0.7fr)]">
+                    <div class="glass-panel rounded-[2.5rem] p-6 md:p-12 2xl:p-14 card-shadow space-y-6 sm:space-y-8 lg:space-y-10 2xl:space-y-12 min-h-[70vh] lg:min-h-[80vh] xl:min-h-[88vh] 2xl:min-h-[92vh] flex flex-col w-full">
                         <div class="flex flex-col gap-3">
                             <p class="text-sm uppercase tracking-[0.5em] text-slate-500 dark:text-slate-400">Prompt console</p>
-                            <h1 class="text-4xl lg:text-5xl font-display font-semibold">Testing wotah </h1>
-                            <p class="text-base text-slate-600 dark:text-slate-300">Describe the report you need, drop supporting files, and send.</p>
+                            <h1 class="text-3xl sm:text-4xl xl:text-5xl font-display font-semibold">Testing wotah </h1>
+                            <p class="text-base sm:text-lg text-slate-600 dark:text-slate-300">Describe the report you need, drop supporting files, and send.</p>
                         </div>
-                        <form action="#" method="post" class="space-y-8 flex-1 flex flex-col">
-                            <label class="block text-base text-slate-600 dark:text-slate-200">
+                        <form action="#" method="post" class="space-y-6 sm:space-y-8 flex-1 flex flex-col">
+                            <label class="block text-base sm:text-lg text-slate-600 dark:text-slate-200">
                                 Prompt
-                                <textarea rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam"></textarea>
+                                <textarea rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam min-h-[220px] sm:min-h-[260px]"></textarea>
                             </label>
                             <div>
                                 <p class="text-sm uppercase tracking-[0.4em] text-slate-500 dark:text-slate-400">Attachments</p>
                                 <div class="mt-4 flex flex-wrap gap-3">
-                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload PDF</button>
-                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload DOCX</button>
-                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload CSV/ZIP</button>
-                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Other formats</button>
+                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload PDF</button>
+                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload DOCX</button>
+                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload CSV/ZIP</button>
+                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Other formats</button>
                                 </div>
                             </div>
                             <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mt-auto pt-4">
-                                <div class="text-base text-slate-600 dark:text-slate-200">
+                                <div class="text-base sm:text-lg text-slate-600 dark:text-slate-200">
                                     <p class="font-semibold">Template: CFIR narrative</p>
                                     <p class="text-sm">Auto-detects based on evidence</p>
                                 </div>
-                                <button type="submit" class="inline-flex justify-center rounded-2xl bg-brand-foam px-8 py-4 text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink">Send prompt</button>
+                                <button type="submit" class="inline-flex justify-center rounded-2xl bg-brand-foam px-6 sm:px-8 py-3.5 sm:py-4 text-base sm:text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink w-full sm:w-auto">Send prompt</button>
                             </div>
                         </form>
                     </div>
 
-                    <aside class="glass-panel rounded-[2.5rem] p-6 md:p-8 card-shadow space-y-6 w-full lg:max-w-sm">
+                    <aside class="glass-panel rounded-[2.5rem] p-6 md:p-8 2xl:p-10 card-shadow space-y-6 2xl:space-y-8 w-full xl:max-w-xs 2xl:max-w-md">
                         <div class="flex items-center justify-between">
                             <p class="text-sm uppercase tracking-[0.5em] text-slate-500 dark:text-slate-400">Recent cases</p>
                             <a href="pages/workflow.html" class="text-base text-brand-foam">Workflow</a>
                         </div>
-                        <ul class="space-y-4 text-base text-slate-700 dark:text-slate-100">
+                        <ul class="space-y-4 text-base sm:text-lg text-slate-700 dark:text-slate-100 max-h-[28rem] 2xl:max-h-[40rem] overflow-y-auto pr-1">
                             <li class="flex items-center justify-between">
                                 <div>
                                     <p class="font-semibold">CFIR-2403 • Card dispute</p>

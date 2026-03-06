@@ -37,21 +37,21 @@
     <div class="glow bg-brand-leaf/20 bottom-0 -left-10"></div>
 
     <div class="relative z-10 flex flex-col min-h-screen">
-        <header class="px-6 lg:px-12 py-6">
-            <nav class="flex items-center justify-between text-sm text-slate-500 dark:text-slate-300">
+        <header class="px-4 sm:px-6 lg:px-12 py-4 sm:py-6">
+            <nav class="flex items-center justify-between text-xs sm:text-sm text-slate-500 dark:text-slate-300">
                 <a href="landing-page.html" class="inline-flex items-center gap-3 font-medium tracking-[0.2em] uppercase">
                     <img src="assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/60 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
                     PromptBridge AI
                 </a>
-                <div class="flex items-center gap-4">
+                <div class="flex items-center gap-3">
                     <a href="pages/forgot-password.html" class="hover:text-brand-foam">Need help?</a>
                 </div>
             </nav>
         </header>
 
-        <main class="flex flex-1 items-center justify-center px-6 lg:px-12 pb-16">
-            <section class="w-full max-w-xl">
-                <div class="glass-panel rounded-3xl p-8 md:p-10 card-shadow">
+        <main class="flex flex-1 items-center justify-center px-4 sm:px-6 lg:px-12 pb-12 lg:pb-16">
+            <section class="w-full max-w-lg">
+                <div class="glass-panel rounded-3xl p-6 sm:p-8 md:p-10 card-shadow">
                     <div class="flex items-center gap-4">
                         <div class="h-12 w-12 rounded-2xl bg-brand-foam/15 border border-white/30 dark:border-white/10 flex items-center justify-center">
                             <svg aria-hidden="true" viewBox="0 0 24 24" class="h-6 w-6 text-brand-foam">
@@ -60,21 +60,21 @@
                         </div>
                         <div>
                             <p class="text-xs uppercase tracking-[0.4em] text-slate-500 dark:text-slate-400">PromptBridge</p>
-                            <h1 class="text-2xl font-display font-semibold">Anti-Fraud Console</h1>
+                            <h1 class="text-2xl sm:text-3xl font-display font-semibold">Anti-Fraud Console</h1>
                         </div>
                     </div>
 
-                    <form class="mt-8 space-y-6" action="landing-page.html" method="get">
+                    <form class="mt-8 space-y-5 sm:space-y-6" action="landing-page.html" method="get">
                         <div>
-                            <label for="email" class="text-sm font-medium text-slate-600 dark:text-slate-200">Work email</label>
-                            <input id="email" name="email" type="email" placeholder="agent@landbank.com" class="mt-2 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-base text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam">
+                            <label for="email" class="text-sm sm:text-base font-medium text-slate-600 dark:text-slate-200">Work email</label>
+                            <input id="email" name="email" type="email" placeholder="agent@landbank.com" class="mt-2 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam">
                         </div>
                         <div>
-                            <label for="password" class="text-sm font-medium text-slate-600 dark:text-slate-200">Password</label>
-                            <input id="password" name="password" type="password" placeholder="••••••••" class="mt-2 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-base text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam">
+                            <label for="password" class="text-sm sm:text-base font-medium text-slate-600 dark:text-slate-200">Password</label>
+                            <input id="password" name="password" type="password" placeholder="••••••••" class="mt-2 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 px-4 py-3 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam">
                         </div>
 
-                        <div class="flex items-center justify-between text-sm text-slate-500 dark:text-slate-300">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm sm:text-base text-slate-500 dark:text-slate-300">
                             <label class="inline-flex items-center gap-2">
                                 <input type="checkbox" class="rounded border-slate-300 bg-white text-brand-foam focus:ring-brand-foam dark:border-white/30 dark:bg-white/10">
                                 Remember device
@@ -82,7 +82,7 @@
                             <a href="pages/forgot-password.html" class="text-brand-foam font-semibold">Forgot password?</a>
                         </div>
 
-                        <button type="submit" class="w-full inline-flex justify-center rounded-2xl bg-brand-foam py-3.5 text-base font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink">Open workspace</button>
+                        <button type="submit" class="w-full inline-flex justify-center rounded-2xl bg-brand-foam py-3.5 sm:py-4 text-base sm:text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink">Open workspace</button>
                     </form>
                 </div>
             </section>
