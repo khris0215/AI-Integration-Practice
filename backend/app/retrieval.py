@@ -1,7 +1,7 @@
-from langchain.document_loaders import DirectoryLoader, UnstructuredFileLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
+from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
 
 CHROMA_PATH = "./chroma_db"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"

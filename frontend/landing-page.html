@@ -77,10 +77,10 @@
                             <h1 class="text-3xl sm:text-4xl xl:text-5xl font-display font-semibold">Testing wotah </h1>
                             <p class="text-base sm:text-lg text-slate-600 dark:text-slate-300">Describe the report you need, drop supporting files, and send.</p>
                         </div>
-                        <form action="#" method="post" class="space-y-6 sm:space-y-8 flex-1 flex flex-col">
+                        <form id="prompt-form" action="#" method="post" class="space-y-6 sm:space-y-8 flex-1 flex flex-col">
                             <label class="block text-base sm:text-lg text-slate-600 dark:text-slate-200">
                                 Prompt
-                                <textarea rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam min-h-[220px] sm:min-h-[260px]"></textarea>
+                                <textarea id="prompt-input" rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam min-h-[220px] sm:min-h-[260px]"></textarea>
                             </label>
                             <div>
                                 <p class="text-sm uppercase tracking-[0.4em] text-slate-500 dark:text-slate-400">Attachments</p>
@@ -99,6 +99,14 @@
                                 <button type="submit" class="inline-flex justify-center rounded-2xl bg-brand-foam px-6 sm:px-8 py-3.5 sm:py-4 text-base sm:text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink w-full sm:w-auto">Send prompt</button>
                             </div>
                         </form>
+
+                        <section class="mt-8 space-y-4" aria-live="polite">
+                            <div id="loading-indicator" class="hidden rounded-2xl border border-dashed border-slate-200 dark:border-white/10 px-4 sm:px-6 py-4 text-sm sm:text-base text-slate-500 dark:text-slate-300">
+                                Generating a mock CFIR response...
+                            </div>
+                            <div id="error-container" class="hidden rounded-2xl border border-red-200 bg-red-50 px-4 sm:px-6 py-4 text-sm sm:text-base text-red-700"></div>
+                            <div id="result-container" class="space-y-4"></div>
+                        </section>
                     </div>
 
                     <aside class="glass-panel rounded-[2.5rem] p-6 md:p-8 2xl:p-10 card-shadow space-y-6 2xl:space-y-8 w-full xl:max-w-xs 2xl:max-w-md">
@@ -135,6 +143,7 @@
         </div>
     </div>
 
+    <script src="script.js" defer></script>
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
     </script>
