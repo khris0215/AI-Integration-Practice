@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PromptBridge AI · Console</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'media',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            ink: '#030712',
+                            dusk: '#0f172a',
+                            foam: '#0ea5e9',
+                            mint: '#10b981',
+                            gold: '#fbbf24'
+                        }
+                    },
+                    fontFamily: {
+                        display: ['Space Grotesk', 'sans-serif'],
+                        body: ['IBM Plex Sans', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
+    <div class="glow bg-brand-foam/25 -top-40 left-1/3"></div>
+    <div class="glow bg-brand-leaf/20 bottom-0 right-0"></div>
+
+    <div class="relative z-10 min-h-screen flex">
+        <aside class="hidden lg:flex w-64 shrink-0 flex-col border-r border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-white/5 backdrop-blur px-6 py-10 text-sm text-slate-600 dark:text-slate-300">
+            <a href="index.html" class="flex items-center gap-3 text-xs font-semibold tracking-[0.35em] uppercase text-slate-500 dark:text-slate-400">
+                <img src="assets/logo/landbank-logo.png" alt="LandBank logo" class="h-12 w-12 rounded-2xl border border-slate-200/70 dark:border-white/15 bg-white/90 dark:bg-white/10 object-contain">
+                Testingers
+            </a>
+            <nav class="mt-10 flex flex-col gap-4">
+                <a href="#console" class="font-semibold text-slate-900 dark:text-white">Console</a>
+                <a href="pages/workflow.html" class="hover:text-brand-foam">Workflow</a>
+                <a href="pages/security.html" class="hover:text-brand-foam">Security</a>
+                <a href="pages/pricing.html" class="hover:text-brand-foam">Pricing</a>
+            </nav>
+            <div class="mt-auto text-xs text-slate-400">
+                <p>Anti-Fraud Desk</p>
+                <p>© <span id="year"></span> PromptBridge AI</p>
+            </div>
+        </aside>
+
+        <div class="flex-1 flex flex-col">
+            <header class="lg:hidden px-6 py-6 border-b border-slate-200/70 dark:border-white/10">
+                <div class="flex items-center justify-between">
+                    <a href="#console" class="flex items-center gap-3 font-semibold">
+                        <img src="assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/70 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
+                        PromptBridge AI
+                    </a>
+                    <div class="flex items-center gap-2 text-sm">
+                        <a href="pages/workflow.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Workflow</a>
+                        <a href="pages/security.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Security</a>
+                    </div>
+                </div>
+            </header>
+
+            <main class="flex-1 px-6 lg:px-16 py-10">
+                <section id="console" class="grid gap-6 lg:gap-10 lg:grid-cols-[minmax(0,2fr)_minmax(0,0.6fr)] items-start">
+                    <div class="glass-panel rounded-[2.5rem] p-6 md:p-12 card-shadow space-y-8 lg:space-y-10 min-h-[70vh] lg:min-h-[85vh] flex flex-col">
+                        <div class="flex flex-col gap-3">
+                            <p class="text-sm uppercase tracking-[0.5em] text-slate-500 dark:text-slate-400">Prompt console</p>
+                            <h1 class="text-4xl lg:text-5xl font-display font-semibold">Testing wotah </h1>
+                            <p class="text-base text-slate-600 dark:text-slate-300">Describe the report you need, drop supporting files, and send.</p>
+                        </div>
+                        <form action="#" method="post" class="space-y-8 flex-1 flex flex-col">
+                            <label class="block text-base text-slate-600 dark:text-slate-200">
+                                Prompt
+                                <textarea rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam"></textarea>
+                            </label>
+                            <div>
+                                <p class="text-sm uppercase tracking-[0.4em] text-slate-500 dark:text-slate-400">Attachments</p>
+                                <div class="mt-4 flex flex-wrap gap-3">
+                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload PDF</button>
+                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload DOCX</button>
+                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Upload CSV/ZIP</button>
+                                    <button type="button" class="inline-flex items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-base font-semibold">Other formats</button>
+                                </div>
+                            </div>
+                            <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mt-auto pt-4">
+                                <div class="text-base text-slate-600 dark:text-slate-200">
+                                    <p class="font-semibold">Template: CFIR narrative</p>
+                                    <p class="text-sm">Auto-detects based on evidence</p>
+                                </div>
+                                <button type="submit" class="inline-flex justify-center rounded-2xl bg-brand-foam px-8 py-4 text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink">Send prompt</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <aside class="glass-panel rounded-[2.5rem] p-6 md:p-8 card-shadow space-y-6 w-full lg:max-w-sm">
+                        <div class="flex items-center justify-between">
+                            <p class="text-sm uppercase tracking-[0.5em] text-slate-500 dark:text-slate-400">Recent cases</p>
+                            <a href="pages/workflow.html" class="text-base text-brand-foam">Workflow</a>
+                        </div>
+                        <ul class="space-y-4 text-base text-slate-700 dark:text-slate-100">
+                            <li class="flex items-center justify-between">
+                                <div>
+                                    <p class="font-semibold">CFIR-2403 • Card dispute</p>
+                                    <p class="text-sm text-slate-400">Updated 3 min ago</p>
+                                </div>
+                                <span class="text-sm text-brand-mint">Ready</span>
+                            </li>
+                            <li class="flex items-center justify-between">
+                                <div>
+                                    <p class="font-semibold">CFIR-2402 • Phishing</p>
+                                    <p class="text-sm text-slate-400">Draft pass pending</p>
+                                </div>
+                                <span class="text-sm text-brand-foam">Drafting</span>
+                            </li>
+                            <li class="flex items-center justify-between">
+                                <div>
+                                    <p class="font-semibold">SAR-1188 • ACH fraud</p>
+                                    <p class="text-sm text-slate-400">Queued for ingest</p>
+                                </div>
+                                <span class="text-sm text-slate-400">Queued</span>
+                            </li>
+                        </ul>
+                    </aside>
+                </section>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+    </script>
+</body>
+</html>

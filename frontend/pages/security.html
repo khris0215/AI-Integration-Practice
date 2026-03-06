@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PromptBridge AI · Security</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/style.css">
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'media',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            ink: '#030712',
+                            dusk: '#0f172a',
+                            foam: '#0ea5e9',
+                            mint: '#10b981',
+                            gold: '#fbbf24'
+                        }
+                    },
+                    fontFamily: {
+                        display: ['Space Grotesk', 'sans-serif'],
+                        body: ['IBM Plex Sans', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
+    <div class="glow bg-brand-foam/25 -top-20 right-10"></div>
+    <div class="glow bg-brand-leaf/25 bottom-0 left-0"></div>
+
+    <div class="relative z-10 min-h-screen flex">
+        <aside class="hidden lg:flex w-64 shrink-0 flex-col border-r border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-white/5 backdrop-blur px-6 py-10 text-sm text-slate-600 dark:text-slate-300">
+            <a href="../index.html" class="flex items-center gap-3 text-xs font-semibold tracking-[0.35em] uppercase text-slate-500 dark:text-slate-400">
+                <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="h-12 w-12 rounded-2xl border border-slate-200/70 dark:border-white/15 bg-white/90 dark:bg-white/10 object-contain">
+                PromptBridge
+            </a>
+            <nav class="mt-10 flex flex-col gap-4">
+                <a href="../landing-page.html" class="hover:text-brand-foam">Console</a>
+                <a href="workflow.html" class="hover:text-brand-foam">Workflow</a>
+                <a href="security.html" class="font-semibold text-slate-900 dark:text-white">Security</a>
+                <a href="pricing.html" class="hover:text-brand-foam">Pricing</a>
+            </nav>
+            <div class="mt-auto text-xs text-slate-400">
+                <p>Anti-Fraud Desk</p>
+                <p>© <span id="year"></span> PromptBridge AI</p>
+            </div>
+        </aside>
+
+        <div class="flex-1 flex flex-col">
+            <header class="lg:hidden px-6 py-6 border-b border-slate-200/70 dark:border-white/10">
+                <div class="flex items-center justify-between">
+                    <a href="../landing-page.html" class="flex items-center gap-3 font-semibold">
+                        <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/70 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
+                        PromptBridge AI
+                    </a>
+                    <div class="flex items-center gap-2 text-sm">
+                        <a href="workflow.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Workflow</a>
+                        <a href="security.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Security</a>
+                        <a href="pricing.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Pricing</a>
+                    </div>
+                </div>
+            </header>
+
+            <main class="flex-1 px-6 lg:px-16 py-10">
+                <div class="max-w-5xl w-full mx-auto space-y-10">
+                    <section class="glass-panel rounded-[2.5rem] p-8 lg:p-10 card-shadow">
+                        <p class="text-sm uppercase tracking-[0.5em] text-brand-foam">Security</p>
+                        <h1 class="mt-4 text-4xl lg:text-5xl font-display font-semibold">Designed for internal teams handling sensitive fraud data.</h1>
+                        <p class="mt-4 text-base text-slate-600 dark:text-slate-300">All controls operate inside your Microsoft tenant with customer-managed keys.</p>
+                    </section>
+
+                    <section class="grid gap-6 md:grid-cols-2">
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
+                            <h2 class="text-2xl font-display font-semibold">Tenant Isolation</h2>
+                            <p class="text-base text-slate-600 dark:text-slate-300">Each deployment runs inside your Azure subscription. PromptBridge does not copy data out of your tenant.</p>
+                        </article>
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
+                            <h2 class="text-2xl font-display font-semibold">Zero Retention</h2>
+                            <p class="text-base text-slate-600 dark:text-slate-300">LLM providers receive ephemeral prompts only; responses are not stored outside your control plane.</p>
+                        </article>
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
+                            <h2 class="text-2xl font-display font-semibold">Audit Feeds</h2>
+                            <p class="text-base text-slate-600 dark:text-slate-300">All prompt runs, evidence fetches, and exports stream to your SIEM in real time.</p>
+                        </article>
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
+                            <h2 class="text-2xl font-display font-semibold">Role Access</h2>
+                            <p class="text-base text-slate-600 dark:text-slate-300">Map analysts, approvers, and admins to Azure AD groups with granular template permissions.</p>
+                        </article>
+                    </section>
+
+                    <section class="glass-panel rounded-[2.5rem] p-8 lg:p-10 card-shadow space-y-6">
+                        <div class="flex items-center justify-between gap-4">
+                            <h2 class="text-3xl font-display font-semibold">Controls checklist</h2>
+                            <span class="text-xs uppercase tracking-[0.4em] text-slate-400">SOC2 · ISO27001</span>
+                        </div>
+                        <ul class="space-y-3 text-base text-slate-600 dark:text-slate-200">
+                            <li>• Support for customer-managed encryption keys (CMK).</li>
+                            <li>• Fine-grained data residency (APAC, EU, NA regions).</li>
+                            <li>• Configurable retention windows per template.</li>
+                            <li>• Automated attachment virus scanning.</li>
+                        </ul>
+                        <div class="rounded-2xl border border-dashed border-slate-200 dark:border-white/15 p-5 text-sm text-slate-500 dark:text-slate-200 flex items-center justify-between">
+                            <span>Need a formal security packet?</span>
+                            <a href="pricing.html" class="rounded-full bg-brand-foam px-5 py-2 text-brand-ink text-base font-semibold">Contact sales</a>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+    </script>
+</body>
+</html>
