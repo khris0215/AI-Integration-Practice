@@ -1,0 +1,15 @@
+fastapi
+uvicorn
+python-multipart
+langchain
+chromadb
+sentence-transformers
+pypdf
+python-docx
+unstructured
+msal
+requests
+python-dotenv
+# Optional OCR:
+# pytesseract
+# pdf2image
