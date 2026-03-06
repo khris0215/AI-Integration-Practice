@@ -55,13 +55,13 @@
         </aside>
 
         <div class="flex-1 flex flex-col">
-            <header class="lg:hidden px-6 py-6 border-b border-slate-200/70 dark:border-white/10">
+            <header class="lg:hidden px-4 sm:px-6 py-5 border-b border-slate-200/70 dark:border-white/10">
                 <div class="flex items-center justify-between">
                     <a href="../landing-page.html" class="flex items-center gap-3 font-semibold">
                         <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/70 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
                         PromptBridge AI
                     </a>
-                    <div class="flex items-center gap-2 text-sm">
+                    <div class="flex items-center gap-2 text-xs sm:text-sm flex-wrap justify-end">
                         <a href="workflow.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Workflow</a>
                         <a href="security.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Security</a>
                         <a href="pricing.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Pricing</a>
@@ -69,47 +69,47 @@
                 </div>
             </header>
 
-            <main class="flex-1 px-6 lg:px-16 py-10">
-                <div class="max-w-5xl w-full mx-auto space-y-10">
-                    <section class="glass-panel rounded-[2.5rem] p-8 lg:p-10 card-shadow">
+            <main class="flex-1 px-4 sm:px-6 lg:px-16 py-8 lg:py-12">
+                <div class="max-w-6xl w-full mx-auto space-y-10">
+                    <section class="glass-panel rounded-[2.5rem] p-6 sm:p-8 lg:p-10 card-shadow">
                         <p class="text-sm uppercase tracking-[0.5em] text-brand-foam">Security</p>
-                        <h1 class="mt-4 text-4xl lg:text-5xl font-display font-semibold">Designed for internal teams handling sensitive fraud data.</h1>
-                        <p class="mt-4 text-base text-slate-600 dark:text-slate-300">All controls operate inside your Microsoft tenant with customer-managed keys.</p>
+                        <h1 class="mt-4 text-3xl sm:text-4xl xl:text-5xl font-display font-semibold">Designed for internal teams handling sensitive fraud data.</h1>
+                        <p class="mt-4 text-base sm:text-lg text-slate-600 dark:text-slate-300">All controls operate inside your Microsoft tenant with customer-managed keys.</p>
                     </section>
 
-                    <section class="grid gap-6 md:grid-cols-2">
+                    <section class="grid gap-4 sm:gap-6 md:grid-cols-2">
                         <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
-                            <h2 class="text-2xl font-display font-semibold">Tenant Isolation</h2>
+                            <h2 class="text-xl sm:text-2xl font-display font-semibold">Tenant Isolation</h2>
                             <p class="text-base text-slate-600 dark:text-slate-300">Each deployment runs inside your Azure subscription. PromptBridge does not copy data out of your tenant.</p>
                         </article>
                         <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
-                            <h2 class="text-2xl font-display font-semibold">Zero Retention</h2>
+                            <h2 class="text-xl sm:text-2xl font-display font-semibold">Zero Retention</h2>
                             <p class="text-base text-slate-600 dark:text-slate-300">LLM providers receive ephemeral prompts only; responses are not stored outside your control plane.</p>
                         </article>
                         <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
-                            <h2 class="text-2xl font-display font-semibold">Audit Feeds</h2>
+                            <h2 class="text-xl sm:text-2xl font-display font-semibold">Audit Feeds</h2>
                             <p class="text-base text-slate-600 dark:text-slate-300">All prompt runs, evidence fetches, and exports stream to your SIEM in real time.</p>
                         </article>
                         <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-3">
-                            <h2 class="text-2xl font-display font-semibold">Role Access</h2>
+                            <h2 class="text-xl sm:text-2xl font-display font-semibold">Role Access</h2>
                             <p class="text-base text-slate-600 dark:text-slate-300">Map analysts, approvers, and admins to Azure AD groups with granular template permissions.</p>
                         </article>
                     </section>
 
-                    <section class="glass-panel rounded-[2.5rem] p-8 lg:p-10 card-shadow space-y-6">
+                    <section class="glass-panel rounded-[2.5rem] p-6 sm:p-8 lg:p-10 card-shadow space-y-6">
                         <div class="flex items-center justify-between gap-4">
-                            <h2 class="text-3xl font-display font-semibold">Controls checklist</h2>
+                            <h2 class="text-2xl sm:text-3xl font-display font-semibold">Controls checklist</h2>
                             <span class="text-xs uppercase tracking-[0.4em] text-slate-400">SOC2 · ISO27001</span>
                         </div>
-                        <ul class="space-y-3 text-base text-slate-600 dark:text-slate-200">
+                        <ul class="space-y-3 text-base sm:text-lg text-slate-600 dark:text-slate-200">
                             <li>• Support for customer-managed encryption keys (CMK).</li>
                             <li>• Fine-grained data residency (APAC, EU, NA regions).</li>
                             <li>• Configurable retention windows per template.</li>
                             <li>• Automated attachment virus scanning.</li>
                         </ul>
-                        <div class="rounded-2xl border border-dashed border-slate-200 dark:border-white/15 p-5 text-sm text-slate-500 dark:text-slate-200 flex items-center justify-between">
+                        <div class="rounded-2xl border border-dashed border-slate-200 dark:border-white/15 p-5 text-sm sm:text-base text-slate-500 dark:text-slate-200 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <span>Need a formal security packet?</span>
-                            <a href="pricing.html" class="rounded-full bg-brand-foam px-5 py-2 text-brand-ink text-base font-semibold">Contact sales</a>
+                            <a href="pricing.html" class="rounded-full bg-brand-foam px-5 py-2 text-brand-ink text-base font-semibold w-full sm:w-auto text-center">Contact sales</a>
                         </div>
                     </section>
                 </div>
