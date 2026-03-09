@@ -204,8 +204,8 @@ body {
 }
 
 .sidebar-link .nav-icon {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   border-radius: 999px;
   font-size: 0.95rem;
   display: inline-flex;
@@ -215,8 +215,8 @@ body {
 }
 
 .sidebar-link .nav-icon svg {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
 }
 
 .sidebar-link.is-active,
@@ -366,6 +366,10 @@ body {
   width: 100%;
 }
 
+.console-sidebar[data-collapsed="true"] .chat-history {
+  display: none;
+}
+
 .console-sidebar[data-collapsed="true"] .sidebar-brand {
   justify-content: center;
   flex-direction: column;
@@ -400,8 +404,8 @@ body {
 }
 
 .console-sidebar[data-collapsed="true"] .sidebar-link .nav-icon {
-  width: 100%;
-  height: 100%;
+  width: 48px;
+  height: 48px;
   border-radius: inherit;
   display: flex;
   align-items: center;
@@ -409,8 +413,8 @@ body {
 }
 
 .console-sidebar[data-collapsed="true"] .sidebar-link .nav-icon svg {
-  width: 88%;
-  height: 88%;
+  width: 78%;
+  height: 78%;
 }
 
 .console-sidebar[data-collapsed="true"] .sidebar-link.is-active,
@@ -438,27 +442,6 @@ body {
   position: fixed;
   z-index: 50;
   padding: 0.4rem 0.6rem;
-  border-radius: 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  background: rgba(14, 165, 233, 0.12);
-  border: 1px solid rgba(14, 165, 233, 0.35);
-  color: var(--text-primary);
-  backdrop-filter: blur(8px);
-  pointer-events: none;
-  transform: translate(0, -50%);
-  opacity: 0;
-  transition: opacity 160ms ease;
-}
-
-@media (prefers-color-scheme: dark) {
-  .sidebar-tooltip {
-    color: var(--text-primary);
-    background: rgba(14, 165, 233, 0.25);
-    border-color: rgba(14, 165, 233, 0.45);
-  }
 }
 
 .app-bar {
