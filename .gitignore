@@ -10,8 +10,10 @@ __pycache__/
 
 # Local RAG / DB / data
 chroma/
+chroma_db/
 data/
 uploads/
+file_dump/
 
 # Environment variables
 .env
