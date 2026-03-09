@@ -15,8 +15,14 @@ def get_embeddings():
 def create_vector_store():
     loader = DirectoryLoader(str(DATA_PATH), glob="**/*", loader_cls=UnstructuredFileLoader, show_progress=True)
     docs = loader.load()
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    # Larger chunks reduce the chance an incident narrative is split across vectors.
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
     chunks = text_splitter.split_documents(docs)
+    for chunk in chunks:
+        source_path = chunk.metadata.get("source")
+        if source_path:
+            filename = Path(source_path).name
+            chunk.page_content = f"[Filename: {filename}]\n{chunk.page_content}"
     embeddings = get_embeddings()
     vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_PATH)
     vectorstore.persist()
@@ -27,6 +33,6 @@ def get_vector_store():
     embeddings = get_embeddings()
     return Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
 
-def retrieve_relevant_chunks(query, k=5):
+def retrieve_relevant_chunks(query, k=10):
     db = get_vector_store()
     return db.similarity_search_with_relevance_scores(query, k=k)

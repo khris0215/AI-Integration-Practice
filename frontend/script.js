@@ -6,6 +6,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const resultContainer = document.getElementById('result-container');
     const loadingIndicator = document.getElementById('loading-indicator');
     const errorContainer = document.getElementById('error-container');
+    const submitButton = document.getElementById('submit-button');
+    const submitLabel = submitButton?.querySelector('[data-role="label"]');
+    const submitSpinner = submitButton?.querySelector('[data-role="spinner"]');
 
     if (!promptForm || !promptInput) {
         return;
@@ -50,8 +53,22 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     function showLoading(isLoading) {
-        if (!loadingIndicator) return;
-        loadingIndicator.classList.toggle('hidden', !isLoading);
+        if (loadingIndicator) {
+            loadingIndicator.classList.toggle('hidden', !isLoading);
+        }
+        toggleSubmitState(isLoading);
+    }
+
+    function toggleSubmitState(isLoading) {
+        if (!submitButton) return;
+        submitButton.disabled = isLoading;
+        submitButton.setAttribute('aria-busy', String(isLoading));
+        if (submitSpinner) {
+            submitSpinner.classList.toggle('hidden', !isLoading);
+        }
+        if (submitLabel) {
+            submitLabel.classList.toggle('hidden', isLoading);
+        }
     }
 
     function showError(message) {
