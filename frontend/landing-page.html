@@ -32,11 +32,11 @@
         }
     </script>
 </head>
-<body class="min-h-screen bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
+<body class="h-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
     <div class="glow bg-brand-foam/25 -top-40 left-1/3"></div>
     <div class="glow bg-brand-leaf/20 bottom-0 right-0"></div>
 
-    <div class="relative z-10 min-h-screen flex">
+    <div class="relative z-10 h-screen flex overflow-hidden">
         <aside class="console-sidebar glass-panel card-shadow" data-sidebar data-collapsed="false">
             <div class="sidebar-top">
                 <a href="index.html" class="sidebar-brand" data-sidebar-brand>
@@ -89,11 +89,7 @@
             <div class="sidebar-divider" aria-hidden="true"></div>
             <section class="chat-history" aria-label="Chat history">
                 <div class="chat-history__header">
-                    <div>
-                        <p class="chat-history__eyebrow">Chat history</p>
-                        <p class="chat-history__title"></p>
-                    </div>
-                    <button type="button" class="chat-history__new">New thread</button>
+                    <p class="chat-history__eyebrow">Chat history</p>
                 </div>
                 <div class="chat-history__list">
                     <ul class="chat-thread" role="list">
@@ -140,6 +136,9 @@
                 <p>Anti-Fraud Desk</p>
                 <p>© <span id="year"></span> Testing AI</p>
             </div>
+            <a href="index.html" class="sidebar-logout" aria-label="Logout">
+                Logout
+            </a>
             <button type="button" class="sidebar-fab" aria-label="Collapse sidebar" data-sidebar-toggle data-direction="collapse">
                 <span class="sidebar-fab__icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
@@ -149,35 +148,39 @@
             </button>
         </aside>
 
-        <div class="flex-1 flex flex-col">
-            <main class="flex-1 px-4 sm:px-6 lg:px-16 py-8 lg:py-12">
-                <section id="console" class="max-w-5xl 2xl:max-w-6xl mx-auto w-full">
-                    <div class="glass-panel rounded-[2.5rem] p-6 md:p-12 2xl:p-14 card-shadow space-y-6 sm:space-y-8 lg:space-y-10 2xl:space-y-12 min-h-[70vh] lg:min-h-[80vh] xl:min-h-[88vh] 2xl:min-h-[92vh] flex flex-col w-full">
-                        <div class="flex flex-col gap-3">
-                            <p class="text-sm uppercase tracking-[0.5em] text-slate-500 dark:text-slate-400">Prompt console</p>
-                            <h1 class="text-3xl sm:text-4xl xl:text-5xl font-display font-semibold">Testing AI</h1>
-                            <p class="text-base sm:text-lg text-slate-600 dark:text-slate-300">Describe the report you need, drop supporting files, and send.</p>
+        <div class="flex-1 flex flex-col min-h-0">
+            <main class="console-main flex-1 min-h-0">
+                <section id="console" class="console-stage min-h-0">
+                    <div class="console-frame glass-panel card-shadow">
+                        <div class="conversation-feed" aria-live="polite">
+                            <div class="conversation-feed__viewport">
+                                <div id="feed-placeholder" class="conversation-feed__empty">
+                                    <p>Drafts and CFIR answers will appear here. Pin your prompt below to begin.</p>
+                                </div>
+                                <div id="loading-indicator" class="conversation-feed__loading hidden">
+                                    <span class="loading-dot"></span>
+                                    <span>Generating a CFIR response...</span>
+                                </div>
+                                <div id="error-container" class="conversation-feed__error hidden"></div>
+                                <div id="result-container" class="conversation-feed__results"></div>
+                            </div>
                         </div>
-                        <form id="prompt-form" action="#" method="post" class="space-y-6 sm:space-y-8 flex-1 flex flex-col">
-                            <label class="block text-base sm:text-lg text-slate-600 dark:text-slate-200">
-                                Prompt
-                                <textarea id="prompt-input" rows="7" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="mt-3 w-full rounded-2xl border border-slate-200 dark:border-white/10 bg-white dark:bg-brand-dusk/50 px-5 py-4 text-base sm:text-lg text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-brand-foam focus:ring-brand-foam min-h-[220px] sm:min-h-[260px]"></textarea>
-                            </label>
-                            <div>
-                                <p class="text-sm uppercase tracking-[0.4em] text-slate-500 dark:text-slate-400">Attachments</p>
-                                <div class="mt-4 flex flex-wrap gap-3">
-                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload PDF</button>
-                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload DOCX</button>
-                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Upload CSV/ZIP</button>
-                                    <button type="button" class="inline-flex w-full sm:w-auto justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-5 py-3 text-sm sm:text-base font-semibold">Other formats</button>
+
+                        <form id="prompt-form" action="#" method="post" class="prompt-dock">
+                            <div class="prompt-toolbar">
+                                <p class="prompt-toolbar__label">Attachments</p>
+                                <div class="prompt-toolbar__actions">
+                                    <button type="button" class="inline-flex justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-4 py-2.5 text-sm font-semibold">Upload PDF</button>
+                                    <button type="button" class="inline-flex justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-4 py-2.5 text-sm font-semibold">Upload DOCX</button>
+                                    <button type="button" class="inline-flex justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-4 py-2.5 text-sm font-semibold">Upload CSV/ZIP</button>
+                                    <button type="button" class="inline-flex justify-center items-center gap-2 rounded-full border border-slate-200 dark:border-white/15 px-4 py-2.5 text-sm font-semibold">Other formats</button>
                                 </div>
                             </div>
-                            <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mt-auto pt-4">
-                                <div class="text-base sm:text-lg text-slate-600 dark:text-slate-200">
-                                    <p class="font-semibold">Template: CFIR narrative</p>
-                                    <p class="text-sm">Auto-detects based on evidence</p>
-                                </div>
-                                <button type="submit" id="submit-button" class="inline-flex items-center justify-center gap-3 rounded-2xl bg-brand-foam px-6 sm:px-8 py-3.5 sm:py-4 text-base sm:text-lg font-semibold text-white dark:text-brand-ink focus-visible:ring-2 focus-visible:ring-brand-foam focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-brand-ink w-full sm:w-auto disabled:opacity-60 disabled:cursor-not-allowed">
+
+                            <div class="prompt-field">
+                                <label for="prompt-input" class="sr-only">Prompt</label>
+                                <textarea id="prompt-input" rows="4" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="prompt-input"></textarea>
+                                <button type="submit" id="submit-button" class="prompt-send-button inline-flex items-center justify-center gap-2 rounded-full bg-brand-foam text-white dark:text-brand-ink font-semibold" data-state="idle">
                                     <span data-role="label">Send prompt</span>
                                     <svg data-role="spinner" class="hidden h-5 w-5 animate-spin text-white" viewBox="0 0 24 24" aria-hidden="true">
                                         <circle class="opacity-20" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"></circle>
@@ -186,14 +189,6 @@
                                 </button>
                             </div>
                         </form>
-
-                        <section class="mt-8 space-y-4" aria-live="polite">
-                            <div id="loading-indicator" class="hidden rounded-2xl border border-dashed border-slate-200 dark:border-white/10 px-4 sm:px-6 py-4 text-sm sm:text-base text-slate-500 dark:text-slate-300">
-                                Generating a CFIR response...
-                            </div>
-                            <div id="error-container" class="hidden rounded-2xl border border-red-200 bg-red-50 px-4 sm:px-6 py-4 text-sm sm:text-base text-red-700"></div>
-                            <div id="result-container" class="space-y-4"></div>
-                        </section>
                     </div>
                 </section>
             </main>
