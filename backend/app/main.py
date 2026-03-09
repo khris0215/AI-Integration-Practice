@@ -1,9 +1,10 @@
 import time
+from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import retrieval
+from . import retrieval, generation
 from .models import QueryRequest, QueryResponse, SourceDocument
 
 
@@ -26,49 +27,45 @@ app.add_middleware(
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest) -> QueryResponse:
-    """Return a mock CFIR response so the frontend can integrate safely."""
+    print("✅ Real query handler called")
     start_time = time.time()
+    try:
+        # 1. Retrieve relevant chunks from Chroma
+        chunks_with_scores = retrieval.retrieve_relevant_chunks(request.prompt, k=5)
 
-    mock_answer = f"""# Cyber Fraud Incident Report
+        if not chunks_with_scores:
+            context = "No relevant documents found in the database."
+            sources = []
+        else:
+            context_parts = []
+            sources = []
+            for doc, score in chunks_with_scores:
+                full_path = doc.metadata.get("source", "Unknown")
+                filename = Path(full_path).name
+                context_parts.append(f"[Source: {filename}]\n{doc.page_content}")
+                sources.append(SourceDocument(
+                    filename=filename,
+                    snippet=doc.page_content[:200] + "...",
+                    relevance_score=float(score)
+                ))
+            context = "\n\n---\n\n".join(context_parts)
 
-**Incident Type:** Phishing Campaign
-**Date Range:** March 1-15, 2025
-**Summary:** Multiple phishing emails targeting finance department
+        # 2. Generate CFIR using Ollama
+        answer = generation.generate_cfir(
+            query=request.prompt,
+            context=context,
+            model=request.model,
+            temperature=request.temperature
+        )
 
-## Details
-Based on your query: \"{request.prompt}\"
-
-This is a mock response while we integrate the AI model.
-- 23 employees received suspicious emails
-- 3 clicked on malicious links
-- No data exfiltration detected
-
-## Recommendations
-- Enable MFA for all finance users
-- Conduct phishing awareness training
-- Review email filtering rules
-"""
-
-    mock_sources = [
-        SourceDocument(
-            filename="incident_20250312_phishing.pdf",
-            snippet="Email security alert: Multiple users reported suspicious messages...",
-            relevance_score=0.95,
-        ),
-        SourceDocument(
-            filename="quarterly_report_q1_2025.docx",
-            snippet="Phishing attempts increased 45% compared to previous quarter...",
-            relevance_score=0.87,
-        ),
-    ]
-
-    processing_time = int((time.time() - start_time) * 1000)
-
-    return QueryResponse(
-        answer=mock_answer,
-        sources=mock_sources,
-        processing_time_ms=processing_time,
-    )
+        processing_time = int((time.time() - start_time) * 1000)
+        return QueryResponse(
+            answer=answer,
+            sources=sources,
+            processing_time_ms=processing_time,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/health")
