@@ -37,38 +37,119 @@
     <div class="glow bg-brand-leaf/30 bottom-0 left-0"></div>
 
     <div class="relative z-10 min-h-screen flex">
-        <aside class="hidden lg:flex w-64 shrink-0 flex-col border-r border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-white/5 backdrop-blur px-6 py-10 text-sm text-slate-600 dark:text-slate-300">
-            <a href="../index.html" class="flex items-center gap-3 text-xs font-semibold tracking-[0.35em] uppercase text-slate-500 dark:text-slate-400">
-                <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="h-12 w-12 rounded-2xl border border-slate-200/70 dark:border-white/15 bg-white/90 dark:bg-white/10 object-contain">
-                Testing AI
-            </a>
-            <nav class="mt-10 flex flex-col gap-4">
-                <a href="../landing-page.html" class="hover:text-brand-foam">Console</a>
-                <a href="workflow.html" class="font-semibold text-slate-900 dark:text-white">Workflow</a>
-                <a href="security.html" class="hover:text-brand-foam">Security</a>
-                <a href="pricing.html" class="hover:text-brand-foam">Pricing</a>
+        <aside class="console-sidebar glass-panel card-shadow" data-sidebar data-collapsed="false">
+            <div class="sidebar-top">
+                <a href="../index.html" class="sidebar-brand" data-sidebar-brand>
+                    <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="sidebar-logo">
+                    <div class="sidebar-brand-text">
+                        <span class="sidebar-brand-title">Testing AI</span>
+                        <span class="sidebar-brand-tagline">Anti-Fraud Console</span>
+                    </div>
+                </a>
+            </div>
+            <nav class="sidebar-nav" aria-label="Primary">
+                <a href="../landing-page.html#console" class="sidebar-link">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="6" y="6" width="12" height="12" rx="3"></rect>
+                            <path d="M9 9h6v6H9z"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Console</span>
+                </a>
+                <a href="workflow.html" class="sidebar-link is-active">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M6 12a6 6 0 0 1 10.39-4.25L18 6v5"></path>
+                            <path d="M18 12a6 6 0 0 1-10.39 4.25L6 18v-5"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Workflow</span>
+                </a>
+                <a href="security.html" class="sidebar-link">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 3l7 3v5c0 5.25-3 8.58-7 10-4-1.42-7-4.75-7-10V6z"></path>
+                            <path d="M12 11v4"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Security</span>
+                </a>
+                <a href="pricing.html" class="sidebar-link">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="7"></circle>
+                            <path d="M12 8v8"></path>
+                            <path d="M9.5 9.5a3 3 0 0 1 5 0"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Pricing</span>
+                </a>
             </nav>
-            <div class="mt-auto text-xs text-slate-400">
+            <div class="sidebar-divider" aria-hidden="true"></div>
+            <section class="chat-history" aria-label="Chat history">
+                <div class="chat-history__header">
+                    <div>
+                        <p class="chat-history__eyebrow">Chat history</p>
+                        <p class="chat-history__title">Pick up where you left off</p>
+                    </div>
+                    <button type="button" class="chat-history__new">New thread</button>
+                </div>
+                <div class="chat-history__list">
+                    <ul class="chat-thread" role="list">
+                        <li>
+                            <button type="button" class="chat-thread__item is-active">
+                                <div class="chat-thread__meta">
+                                    <span class="chat-thread__label">CFIR-2403</span>
+                                    <span class="chat-thread__time">3m ago</span>
+                                </div>
+                                <p>Disputed call logs and reissued card follow-up draft.</p>
+                            </button>
+                        </li>
+                        <li>
+                            <button type="button" class="chat-thread__item">
+                                <div class="chat-thread__meta">
+                                    <span class="chat-thread__label">SAR-1188</span>
+                                    <span class="chat-thread__time">Today</span>
+                                </div>
+                                <p>ACH fraud escalation w/ branch statements attached.</p>
+                            </button>
+                        </li>
+                        <li>
+                            <button type="button" class="chat-thread__item">
+                                <div class="chat-thread__meta">
+                                    <span class="chat-thread__label">INS-0934</span>
+                                    <span class="chat-thread__time">Yesterday</span>
+                                </div>
+                                <p>Internal access review with HR disposition checklist.</p>
+                            </button>
+                        </li>
+                        <li>
+                            <button type="button" class="chat-thread__item">
+                                <div class="chat-thread__meta">
+                                    <span class="chat-thread__label">CFIR-2398</span>
+                                    <span class="chat-thread__time">Mar 4</span>
+                                </div>
+                                <p>High-value scam ring — summarize outbound call tree.</p>
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </section>
+            <div class="sidebar-meta">
                 <p>Anti-Fraud Desk</p>
                 <p>© <span id="year"></span> Testing AI</p>
             </div>
+            <button type="button" class="sidebar-fab" aria-label="Collapse sidebar" data-sidebar-toggle data-direction="collapse">
+                <span class="sidebar-fab__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 6l6 6-6 6"></path>
+                    </svg>
+                </span>
+            </button>
         </aside>
 
         <div class="flex-1 flex flex-col">
-            <header class="lg:hidden px-4 sm:px-6 py-5 border-b border-slate-200/70 dark:border-white/10">
-                <div class="flex items-center justify-between">
-                    <a href="../landing-page.html" class="flex items-center gap-3 font-semibold">
-                        <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="h-10 w-10 rounded-xl border border-slate-200/70 dark:border-white/10 bg-white/80 dark:bg-white/5 object-contain">
-                        Testing AI
-                    </a>
-                    <div class="flex items-center gap-2 text-xs sm:text-sm flex-wrap justify-end">
-                        <a href="workflow.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Workflow</a>
-                        <a href="security.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Security</a>
-                        <a href="pricing.html" class="rounded-full border border-slate-200 dark:border-white/20 px-4 py-2">Pricing</a>
-                    </div>
-                </div>
-            </header>
-
             <main class="flex-1 px-4 sm:px-6 lg:px-16 py-8 lg:py-12">
                 <div class="max-w-6xl w-full mx-auto space-y-10">
                     <section class="glass-panel rounded-[2.5rem] p-6 sm:p-8 lg:p-10 card-shadow">
@@ -115,6 +196,7 @@
         </div>
     </div>
 
+    <script src="../script.js" defer></script>
     <script>
         document.getElementById('year').textContent = new Date().getFullYear();
     </script>
