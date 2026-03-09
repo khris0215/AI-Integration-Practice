@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitButton = document.getElementById('submit-button');
     const submitLabel = submitButton?.querySelector('[data-role="label"]');
     const submitSpinner = submitButton?.querySelector('[data-role="spinner"]');
+    const feedPlaceholder = document.getElementById('feed-placeholder');
     const sidebar = document.querySelector('[data-sidebar]');
     const sidebarToggleButtons = document.querySelectorAll('[data-sidebar-toggle]');
     const sidebarBrands = document.querySelectorAll('[data-sidebar-brand]');
@@ -17,10 +18,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const collapseQuery = window.matchMedia('(max-width: 1024px)');
     let userPreferenceLocked = false;
     let hideSidebarTooltip = () => {};
+    let activeController = null;
+    let isProcessing = false;
 
     if (promptForm && promptInput) {
         promptForm.addEventListener('submit', async (event) => {
             event.preventDefault();
+            if (isProcessing) {
+                cancelActiveRequest();
+                return;
+            }
+
             const prompt = promptInput.value.trim();
 
             if (!prompt) {
@@ -32,6 +40,9 @@ document.addEventListener('DOMContentLoaded', () => {
             showError('');
             showLoading(true);
 
+            const controller = new AbortController();
+            activeController = controller;
+
             try {
                 const response = await fetch(`${API_BASE}/query`, {
                     method: 'POST',
@@ -42,6 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         prompt,
                         temperature: 0.2,
                     }),
+                    signal: controller.signal,
                 });
 
                 if (!response.ok) {
@@ -51,11 +63,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const data = await response.json();
                 displayResult(data);
             } catch (error) {
-                showError(error.message || 'Unable to reach the CFIR API.');
+                if (error.name === 'AbortError') {
+                    showError('Prompt cancelled.');
+                } else {
+                    showError(error.message || 'Unable to reach the CFIR API.');
+                }
             } finally {
                 showLoading(false);
+                if (activeController === controller) {
+                    activeController = null;
+                }
             }
         });
+    }
+
+    function cancelActiveRequest() {
+        if (!activeController) {
+            return;
+        }
+        activeController.abort();
     }
 
     function showLoading(isLoading) {
@@ -63,17 +89,20 @@ document.addEventListener('DOMContentLoaded', () => {
             loadingIndicator.classList.toggle('hidden', !isLoading);
         }
         toggleSubmitState(isLoading);
+        updateFeedPlaceholder();
     }
 
     function toggleSubmitState(isLoading) {
+        isProcessing = isLoading;
         if (!submitButton) return;
-        submitButton.disabled = isLoading;
+        submitButton.setAttribute('data-state', isLoading ? 'cancel' : 'idle');
         submitButton.setAttribute('aria-busy', String(isLoading));
+        submitButton.disabled = false;
         if (submitSpinner) {
             submitSpinner.classList.toggle('hidden', !isLoading);
         }
         if (submitLabel) {
-            submitLabel.classList.toggle('hidden', isLoading);
+            submitLabel.textContent = isLoading ? 'Cancel' : 'Send prompt';
         }
     }
 
@@ -82,11 +111,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!message) {
             errorContainer.textContent = '';
             errorContainer.classList.add('hidden');
+            updateFeedPlaceholder();
             return;
         }
 
         errorContainer.textContent = message;
         errorContainer.classList.remove('hidden');
+        updateFeedPlaceholder();
     }
 
     function displayResult(data) {
@@ -153,11 +184,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         resultContainer.append(...fragments);
+        resultContainer.scrollTop = resultContainer.scrollHeight;
+        updateFeedPlaceholder();
     }
 
     function clearResult() {
         if (!resultContainer) return;
         resultContainer.innerHTML = '';
+        updateFeedPlaceholder();
+    }
+
+    function updateFeedPlaceholder() {
+        if (!feedPlaceholder) {
+            return;
+        }
+        const hasResults = Boolean(resultContainer?.childElementCount);
+        const hasError = errorContainer && !errorContainer.classList.contains('hidden');
+        const shouldHide = hasResults || isProcessing || hasError;
+        feedPlaceholder.classList.toggle('hidden', shouldHide);
     }
 
     initSidebar();
