@@ -366,7 +366,7 @@ html {
 }
 
 .console-sidebar {
-  width: clamp(260px, 24vw, 320px);
+  width: clamp(300px, 28vw, 360px);
   padding: 2.5rem 1.75rem;
   display: flex;
   flex-direction: column;
