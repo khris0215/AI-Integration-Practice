@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadingIndicator = document.getElementById('loading-indicator');
     const errorContainer = document.getElementById('error-container');
     const submitButton = document.getElementById('submit-button');
+    const fillTemplateButton = document.getElementById('fill-template-btn');
+    const templateFileInput = document.getElementById('template-file');
     const submitLabel = submitButton?.querySelector('[data-role="label"]');
     const submitSpinner = submitButton?.querySelector('[data-role="spinner"]');
     const feedPlaceholder = document.getElementById('feed-placeholder');
@@ -73,6 +75,58 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (activeController === controller) {
                     activeController = null;
                 }
+            }
+        });
+    }
+
+    if (fillTemplateButton && templateFileInput && promptInput) {
+        fillTemplateButton.addEventListener('click', async () => {
+            if (isProcessing) {
+                return;
+            }
+
+            if (!templateFileInput.files || !templateFileInput.files.length) {
+                showError('Please select a template file.');
+                return;
+            }
+
+            const file = templateFileInput.files[0];
+            const prompt = promptInput.value.trim();
+            if (!prompt) {
+                showError('Please enter a prompt describing what to fill.');
+                return;
+            }
+
+            showError('');
+            showLoading(true);
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('prompt', prompt);
+
+                const response = await fetch(`${API_BASE}/fill-template`, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'Template filling failed');
+                }
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `filled_${file.name}`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            } catch (error) {
+                showError(error.message || 'Template filling failed');
+            } finally {
+                showLoading(false);
             }
         });
     }

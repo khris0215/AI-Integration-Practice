@@ -10,6 +10,11 @@ unstructured
 msal
 requests
 python-dotenv
+python-docx
+docxtpl
+pillow
+pdfrw
+lxml
 # Optional OCR:
 # pytesseract
 # pdf2image
