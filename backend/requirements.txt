@@ -2,6 +2,8 @@ fastapi
 uvicorn
 python-multipart
 langchain
+langchain-huggingface
+langchain-chroma
 chromadb
 sentence-transformers
 pypdf

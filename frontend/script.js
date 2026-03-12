@@ -1,16 +1,21 @@
 const API_BASE = 'http://localhost:8000/api';
+const PROMPT_DRAFT_KEY = 'landing-prompt-draft';
+const RESULT_CACHE_KEY = 'landing-result-html';
+const ERROR_CACHE_KEY = 'landing-error-message';
+const TEMPLATE_FILENAME_KEY = 'landing-template-filename';
 
 document.addEventListener('DOMContentLoaded', () => {
     const promptForm = document.getElementById('prompt-form');
     const promptInput = document.getElementById('prompt-input');
     const resultContainer = document.getElementById('result-container');
-    const loadingIndicator = document.getElementById('loading-indicator');
-    const errorContainer = document.getElementById('error-container');
+    let loadingIndicator = document.getElementById('loading-indicator');
+    let errorContainer = document.getElementById('error-container');
     const submitButton = document.getElementById('submit-button');
     const fillTemplateButton = document.getElementById('fill-template-btn');
     const templateFileInput = document.getElementById('template-file');
     const submitLabel = submitButton?.querySelector('[data-role="label"]');
     const submitSpinner = submitButton?.querySelector('[data-role="spinner"]');
+    const backendStatus = document.getElementById('backend-status');
     const feedPlaceholder = document.getElementById('feed-placeholder');
     const sidebar = document.querySelector('[data-sidebar]');
     const sidebarToggleButtons = document.querySelectorAll('[data-sidebar-toggle]');
@@ -22,47 +27,84 @@ document.addEventListener('DOMContentLoaded', () => {
     let hideSidebarTooltip = () => {};
     let activeController = null;
     let isProcessing = false;
+    let activeOperation = null;
+    let backendReady = false;
+
+    setBackendReady(false, 'Checking backend status...');
+
+    ensureStatusContainers();
+    restoreDraftState();
+    void pollBackendHealth();
+
+    if (promptInput) {
+        promptInput.addEventListener('input', () => {
+            safeSet(PROMPT_DRAFT_KEY, promptInput.value);
+        });
+    }
+
+    if (templateFileInput) {
+        templateFileInput.addEventListener('change', () => {
+            const selectedName = templateFileInput.files && templateFileInput.files.length
+                ? templateFileInput.files[0].name
+                : '';
+            safeSet(TEMPLATE_FILENAME_KEY, selectedName);
+        });
+    }
 
     if (promptForm && promptInput) {
         promptForm.addEventListener('submit', async (event) => {
             event.preventDefault();
-            if (isProcessing) {
+            if (activeOperation === 'query') {
                 cancelActiveRequest();
+                return;
+            }
+            if (activeOperation && activeOperation !== 'query') {
+                showError('Template filling is in progress. Please wait for it to finish.');
                 return;
             }
 
             const prompt = promptInput.value.trim();
+
+            if (!backendReady) {
+                showError('Backend is still starting. Please wait until status shows connected.');
+                return;
+            }
 
             if (!prompt) {
                 showError('Please describe the fraud scenario you want to generate.');
                 return;
             }
 
-            clearResult();
             showError('');
-            showLoading(true);
+            activeOperation = 'query';
+            showLoading(true, 'query');
+            safeSet(PROMPT_DRAFT_KEY, prompt);
 
             const controller = new AbortController();
             activeController = controller;
 
             try {
-                const response = await fetch(`${API_BASE}/query`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        prompt,
-                        temperature: 0.2,
+                const response = await fetchWithStartupRetry(
+                    () => fetch(`${API_BASE}/query`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            prompt,
+                            temperature: 0.2,
+                        }),
+                        signal: controller.signal,
                     }),
-                    signal: controller.signal,
-                });
+                    controller.signal,
+                );
 
                 if (!response.ok) {
                     throw new Error(`API error: ${response.status}`);
                 }
 
                 const data = await response.json();
+                clearResult();
                 displayResult(data);
             } catch (error) {
                 if (error.name === 'AbortError') {
@@ -71,17 +113,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     showError(error.message || 'Unable to reach the CFIR API.');
                 }
             } finally {
-                showLoading(false);
+                showLoading(false, 'query');
                 if (activeController === controller) {
                     activeController = null;
                 }
+                activeOperation = null;
             }
         });
     }
 
     if (fillTemplateButton && templateFileInput && promptInput) {
         fillTemplateButton.addEventListener('click', async () => {
-            if (isProcessing) {
+            if (activeOperation) {
+                if (activeOperation === 'query') {
+                    showError('A prompt request is running. Wait for it to finish or cancel it first.');
+                }
                 return;
             }
 
@@ -92,21 +138,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const file = templateFileInput.files[0];
             const prompt = promptInput.value.trim();
+            if (!backendReady) {
+                showError('Backend is still starting. Please wait until status shows connected.');
+                return;
+            }
             if (!prompt) {
                 showError('Please enter a prompt describing what to fill.');
                 return;
             }
 
             showError('');
-            showLoading(true);
+            activeOperation = 'template';
+            showLoading(true, 'template');
             try {
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('prompt', prompt);
-
-                const response = await fetch(`${API_BASE}/fill-template`, {
-                    method: 'POST',
-                    body: formData,
+                const response = await fetchWithStartupRetry(() => {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('prompt', prompt);
+                    return fetch(`${API_BASE}/fill-template`, {
+                        method: 'POST',
+                        body: formData,
+                    });
                 });
 
                 if (!response.ok) {
@@ -123,10 +175,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 a.click();
                 a.remove();
                 window.URL.revokeObjectURL(url);
+                showError('');
             } catch (error) {
                 showError(error.message || 'Template filling failed');
             } finally {
-                showLoading(false);
+                showLoading(false, 'template');
+                activeOperation = null;
             }
         });
     }
@@ -138,25 +192,103 @@ document.addEventListener('DOMContentLoaded', () => {
         activeController.abort();
     }
 
-    function showLoading(isLoading) {
+    function showLoading(isLoading, operation = 'query') {
         if (loadingIndicator) {
             loadingIndicator.classList.toggle('hidden', !isLoading);
         }
-        toggleSubmitState(isLoading);
+        toggleSubmitState(isLoading, operation);
         updateFeedPlaceholder();
     }
 
-    function toggleSubmitState(isLoading) {
+    function toggleSubmitState(isLoading, operation) {
         isProcessing = isLoading;
-        if (!submitButton) return;
-        submitButton.setAttribute('data-state', isLoading ? 'cancel' : 'idle');
-        submitButton.setAttribute('aria-busy', String(isLoading));
-        submitButton.disabled = false;
-        if (submitSpinner) {
-            submitSpinner.classList.toggle('hidden', !isLoading);
+        if (submitButton) {
+            const isQueryOperation = operation === 'query';
+            submitButton.setAttribute('data-state', isLoading && isQueryOperation ? 'cancel' : 'idle');
+            submitButton.setAttribute('aria-busy', String(isLoading && isQueryOperation));
+            submitButton.disabled = !backendReady || Boolean(isLoading && !isQueryOperation);
+            if (submitSpinner) {
+                submitSpinner.classList.toggle('hidden', !(isLoading && isQueryOperation));
+            }
+            if (submitLabel) {
+                submitLabel.textContent = isLoading && isQueryOperation ? 'Cancel' : 'Send prompt';
+            }
         }
-        if (submitLabel) {
-            submitLabel.textContent = isLoading ? 'Cancel' : 'Send prompt';
+
+        if (fillTemplateButton) {
+            fillTemplateButton.disabled = !backendReady || isLoading;
+            fillTemplateButton.classList.toggle('opacity-60', isLoading);
+            fillTemplateButton.classList.toggle('cursor-not-allowed', isLoading);
+        }
+
+        if (templateFileInput) {
+            templateFileInput.disabled = !backendReady || isLoading;
+        }
+    }
+
+    async function pollBackendHealth() {
+        const maxAttempts = 15;
+        const intervalMs = 2000;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+                setBackendReady(false, `Connecting to backend... (${attempt}/${maxAttempts})`);
+                const response = await fetch(`${API_BASE}/health`, {
+                    method: 'GET',
+                    cache: 'no-store',
+                });
+                if (response.ok) {
+                    const payload = await response.json();
+                    if (payload && payload.status === 'healthy' && payload.ready === true) {
+                        setBackendReady(true, `Backend connected (v${payload.version || 'unknown'}).`);
+                        return;
+                    }
+
+                    if (payload && payload.status === 'starting') {
+                        const startupError = payload.startup_error ? ` Warmup issue: ${payload.startup_error}` : '';
+                        setBackendReady(false, `Backend online, finishing warmup...${startupError}`);
+                    }
+                }
+            } catch (_) {
+                // Ignore transient failures during startup and continue polling.
+            }
+
+            if (attempt < maxAttempts) {
+                await wait(intervalMs);
+            }
+        }
+
+        setBackendReady(false, 'Backend unavailable. Start the API server and refresh this page.');
+        showError('Backend health check failed after multiple attempts.');
+    }
+
+    function setBackendReady(isReady, message) {
+        backendReady = isReady;
+        if (backendStatus) {
+            backendStatus.textContent = message;
+            backendStatus.classList.toggle('hidden', isReady);
+            backendStatus.classList.remove('border-amber-200', 'bg-amber-50', 'text-amber-700', 'dark:border-amber-400/30', 'dark:bg-amber-400/10', 'dark:text-amber-200');
+            backendStatus.classList.remove('border-emerald-200', 'bg-emerald-50', 'text-emerald-700', 'dark:border-emerald-400/30', 'dark:bg-emerald-400/10', 'dark:text-emerald-200');
+            backendStatus.classList.add(
+                isReady ? 'border-emerald-200' : 'border-amber-200',
+                isReady ? 'bg-emerald-50' : 'bg-amber-50',
+                isReady ? 'text-emerald-700' : 'text-amber-700',
+                isReady ? 'dark:border-emerald-400/30' : 'dark:border-amber-400/30',
+                isReady ? 'dark:bg-emerald-400/10' : 'dark:bg-amber-400/10',
+                isReady ? 'dark:text-emerald-200' : 'dark:text-amber-200',
+            );
+        }
+
+        if (submitButton) {
+            submitButton.disabled = !isReady;
+        }
+        if (fillTemplateButton) {
+            fillTemplateButton.disabled = !isReady;
+            fillTemplateButton.classList.toggle('opacity-60', !isReady);
+            fillTemplateButton.classList.toggle('cursor-not-allowed', !isReady);
+        }
+        if (templateFileInput) {
+            templateFileInput.disabled = !isReady;
         }
     }
 
@@ -165,12 +297,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!message) {
             errorContainer.textContent = '';
             errorContainer.classList.add('hidden');
+            safeSet(ERROR_CACHE_KEY, '');
             updateFeedPlaceholder();
             return;
         }
 
         errorContainer.textContent = message;
         errorContainer.classList.remove('hidden');
+        safeSet(ERROR_CACHE_KEY, message);
         updateFeedPlaceholder();
     }
 
@@ -239,13 +373,145 @@ document.addEventListener('DOMContentLoaded', () => {
 
         resultContainer.append(...fragments);
         resultContainer.scrollTop = resultContainer.scrollHeight;
+        safeSet(RESULT_CACHE_KEY, resultContainer.innerHTML);
         updateFeedPlaceholder();
     }
 
     function clearResult() {
         if (!resultContainer) return;
         resultContainer.innerHTML = '';
+        safeSet(RESULT_CACHE_KEY, '');
         updateFeedPlaceholder();
+    }
+
+    async function fetchWithStartupRetry(requestFactory, signal, maxAttempts = 4) {
+        let lastError = null;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            if (signal?.aborted) {
+                throw new DOMException('The operation was aborted.', 'AbortError');
+            }
+
+            try {
+                const response = await requestFactory();
+                if (response.ok) {
+                    return response;
+                }
+
+                if ([502, 503, 504].includes(response.status) && attempt < maxAttempts) {
+                    showError(`Backend is waking up... retry ${attempt}/${maxAttempts - 1}`);
+                    await wait(900 * attempt);
+                    continue;
+                }
+
+                return response;
+            } catch (error) {
+                if (error?.name === 'AbortError') {
+                    throw error;
+                }
+
+                lastError = error;
+                if (attempt < maxAttempts) {
+                    const statusHint = await detectBackendStatusHint();
+                    showError(`${statusHint} Retrying... (${attempt}/${maxAttempts - 1})`);
+                    await wait(900 * attempt);
+                    continue;
+                }
+            }
+        }
+
+        const fallbackMessage = 'Backend is still starting. Your draft is preserved - try again in a few seconds.';
+        throw new Error(lastError?.message || fallbackMessage);
+    }
+
+    async function detectBackendStatusHint() {
+        try {
+            const response = await fetch(`${API_BASE}/health`, { method: 'GET', cache: 'no-store' });
+            if (!response.ok) {
+                return 'Backend is temporarily unreachable.';
+            }
+
+            const payload = await response.json();
+            if (payload?.status === 'starting' || payload?.ready === false) {
+                return 'Backend warmup is still in progress.';
+            }
+
+            if (payload?.status === 'healthy' && payload?.ready === true) {
+                return 'Connection dropped while backend is healthy.';
+            }
+        } catch (_) {
+            return 'Backend is temporarily unreachable.';
+        }
+
+        return 'Backend is still initializing.';
+    }
+
+    function wait(ms) {
+        return new Promise((resolve) => {
+            window.setTimeout(resolve, ms);
+        });
+    }
+
+    function restoreDraftState() {
+        const draftPrompt = safeGet(PROMPT_DRAFT_KEY);
+        if (promptInput && draftPrompt) {
+            promptInput.value = draftPrompt;
+        }
+
+        const cachedResult = safeGet(RESULT_CACHE_KEY);
+        if (resultContainer && cachedResult) {
+            resultContainer.innerHTML = cachedResult;
+        }
+
+        const cachedError = safeGet(ERROR_CACHE_KEY);
+        if (cachedError) {
+            showError(cachedError);
+        } else {
+            showError('');
+        }
+
+        const cachedTemplateName = safeGet(TEMPLATE_FILENAME_KEY);
+        if (templateFileInput && cachedTemplateName) {
+            templateFileInput.title = `Re-attach template file: ${cachedTemplateName}`;
+        }
+
+        updateFeedPlaceholder();
+    }
+
+    function ensureStatusContainers() {
+        if (!promptForm) {
+            return;
+        }
+
+        if (!loadingIndicator) {
+            loadingIndicator = document.createElement('div');
+            loadingIndicator.id = 'loading-indicator';
+            loadingIndicator.className = 'hidden mt-2 text-sm text-slate-500 dark:text-slate-300';
+            loadingIndicator.textContent = 'Processing request...';
+            promptForm.prepend(loadingIndicator);
+        }
+
+        if (!errorContainer) {
+            errorContainer = document.createElement('div');
+            errorContainer.id = 'error-container';
+            errorContainer.className = 'hidden mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200';
+            promptForm.append(errorContainer);
+        }
+    }
+
+    function safeGet(key) {
+        try {
+            return localStorage.getItem(key) || '';
+        } catch (_) {
+            return '';
+        }
+    }
+
+    function safeSet(key, value) {
+        try {
+            localStorage.setItem(key, value || '');
+        } catch (_) {
+            // Best-effort persistence only.
+        }
     }
 
     function updateFeedPlaceholder() {
