@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 class QueryRequest(BaseModel):
     prompt: str
-    model: Optional[str] = "mistral:7b-instruct-q4_K_M"
+    model: Optional[str] = "phi4:14b-q4_K_M"
     temperature: Optional[float] = 0.2
     max_tokens: Optional[int] = 1000
 

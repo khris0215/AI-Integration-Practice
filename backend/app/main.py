@@ -1,21 +1,64 @@
 import time
-import io
 import logging
+import asyncio
+import re
 from pathlib import Path
-
-from docx import Document
-from docxtpl import DocxTemplate
 
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 
-from . import template_filler, retrieval, generation
+from . import retrieval, generation, template_filler
 from .models import QueryRequest, QueryResponse, SourceDocument
 
 
 app = FastAPI(title="CFIR Generator API")
 logger = logging.getLogger(__name__)
+app.state.ready = False
+app.state.startup_error = ""
+
+FILENAME_HEADER_RE = re.compile(r"(?im)^\s*\[Filename:\s*[^\]]+\]\s*$")
+
+
+def _clean_chunk_text(text: str) -> str:
+    """Remove retrieval-only filename tags so they don't pollute extracted fields."""
+    cleaned = FILENAME_HEADER_RE.sub("", text or "")
+    return cleaned.strip()
+
+
+def _build_incident_context(chunks_with_scores: list, max_chunks: int = 8) -> tuple[str, list[SourceDocument]]:
+    """Focus context on the strongest single source file to avoid cross-incident field leakage."""
+    if not chunks_with_scores:
+        return "No relevant documents found in the database.", []
+
+    grouped = {}
+    for doc, score in chunks_with_scores:
+        source_path = (doc.metadata or {}).get("source", "Unknown")
+        filename = Path(source_path).name if source_path else "Unknown"
+        bucket = grouped.setdefault(filename, {"total": 0.0, "items": []})
+        bucket["total"] += float(score)
+        bucket["items"].append((doc, float(score)))
+
+    dominant_filename, dominant_group = max(
+        grouped.items(),
+        key=lambda item: (item[1]["total"], len(item[1]["items"])),
+    )
+
+    selected_items = sorted(dominant_group["items"], key=lambda pair: pair[1], reverse=True)[:max_chunks]
+    context_parts = []
+    sources = []
+    for doc, score in selected_items:
+        clean_text = _clean_chunk_text(doc.page_content)
+        if clean_text:
+            context_parts.append(clean_text)
+        sources.append(SourceDocument(
+            filename=dominant_filename,
+            snippet=(clean_text[:200] + "...") if clean_text else "",
+            relevance_score=float(score),
+        ))
+
+    context = "\n\n---\n\n".join(part for part in context_parts if part) or "No relevant documents found in the database."
+    return context, sources
 
 app.add_middleware(
     CORSMiddleware,
@@ -32,30 +75,30 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def warm_up_services() -> None:
+    """Initialize heavy dependencies before accepting user requests."""
+    try:
+        await asyncio.to_thread(retrieval.warm_up_retrieval)
+        app.state.ready = True
+        app.state.startup_error = ""
+        logger.info("Backend warmup completed successfully.")
+    except Exception as exc:
+        app.state.ready = False
+        app.state.startup_error = str(exc)
+        logger.exception("Backend warmup failed: %s", exc)
+
+
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest) -> QueryResponse:
     print("✅ Real query handler called")
     start_time = time.time()
+    if not app.state.ready:
+        raise HTTPException(status_code=503, detail="Backend warmup in progress. Please retry shortly.")
     try:
         # 1. Retrieve relevant chunks from Chroma
-        chunks_with_scores = retrieval.retrieve_relevant_chunks(request.prompt, k=5)
-
-        if not chunks_with_scores:
-            context = "No relevant documents found in the database."
-            sources = []
-        else:
-            context_parts = []
-            sources = []
-            for doc, score in chunks_with_scores:
-                full_path = doc.metadata.get("source", "Unknown")
-                filename = Path(full_path).name
-                context_parts.append(f"[Source: {filename}]\n{doc.page_content}")
-                sources.append(SourceDocument(
-                    filename=filename,
-                    snippet=doc.page_content[:200] + "...",
-                    relevance_score=float(score)
-                ))
-            context = "\n\n---\n\n".join(context_parts)
+        chunks_with_scores = retrieval.retrieve_relevant_chunks(request.prompt, k=8)
+        context, sources = _build_incident_context(chunks_with_scores)
 
         # 2. Generate CFIR using Ollama
         answer = generation.generate_cfir(
@@ -77,7 +120,13 @@ async def query(request: QueryRequest) -> QueryResponse:
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "healthy", "version": "1.0.0"}
+    status = "healthy" if app.state.ready else "starting"
+    return {
+        "status": status,
+        "ready": bool(app.state.ready),
+        "version": "1.0.0",
+        "startup_error": app.state.startup_error,
+    }
 
 
 @app.post("/api/ingest", status_code=202)
@@ -95,118 +144,90 @@ async def fill_template(
     file: UploadFile = File(...),
     prompt: str = Form(...),
 ):
+    if not app.state.ready:
+        return JSONResponse(status_code=503, content={"error": "Backend warmup in progress. Please retry shortly."})
+
     try:
-        # 1. Retrieve context
-        chunks_with_scores = retrieval.retrieve_relevant_chunks(prompt, k=5)
+        chunks_with_scores = retrieval.retrieve_relevant_chunks(prompt, k=8)
         if not chunks_with_scores:
+            if retrieval.query_has_temporal_constraint(prompt):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "error": "No incident matched the requested month/year in your prompt. Verify source files and rebuild the vector index."
+                    },
+                )
             context = "No relevant documents found."
         else:
-            context = "\n\n---\n\n".join([doc.page_content for doc, _ in chunks_with_scores])
+            context, _ = _build_incident_context(chunks_with_scores)
 
-        # 2. Define fields (customize as needed)
         required_fields = [
-            "incident_id", "date", "type", "description",
-            "impact", "actions_taken", "reporter_name",
-            "amount_lost", "currency",
+            "incident_id", "date", "type", "description", "impact", "actions_taken",
+            "recommendations",
+            "reporter_name", "department", "contact_number", "email", "time", "location", "system",
+            "amount_lost", "currency", "evidence_list",
         ]
 
-        # 3. AI extracts structured data
+        filename = file.filename or "template.docx"
+        lower_filename = filename.lower()
+        template_bytes = await file.read()
+
         extracted_data = generation.extract_structured_data(prompt, context, required_fields)
         if not isinstance(extracted_data, dict):
             extracted_data = {}
-        logger.info("Extracted data keys: %s", list(extracted_data.keys()))
+        for field in required_fields:
+            extracted_data.setdefault(field, None)
 
-        # 4. Handle based on file type
-        template_bytes = await file.read()
-        filename = file.filename or "template"
-        lower_filename = filename.lower()
+        if not extracted_data.get("recommendations"):
+            extracted_data["recommendations"] = generation.synthesize_recommendations(extracted_data)
 
-        if lower_filename.endswith('.docx'):
-            # Try Jinja2 first (in case template has {{placeholders}})
-            template_stream = io.BytesIO(template_bytes)
-            doc = DocxTemplate(template_stream)
-            doc.render(extracted_data)
-            output_stream = io.BytesIO()
-            doc.save(output_stream)
-            output_stream.seek(0)
-            rendered = output_stream.getvalue()
+        for key, value in extracted_data.items():
+            if value is None:
+                extracted_data[key] = ""
 
-            # Fall back if output still has placeholders or original had no Jinja placeholders.
-            original_doc = Document(io.BytesIO(template_bytes))
-            original_has_jinja = any('{{' in para.text for para in original_doc.paragraphs)
-            if not original_has_jinja:
-                for table in original_doc.tables:
-                    for row in table.rows:
-                        for cell in row.cells:
-                            if any('{{' in para.text for para in cell.paragraphs):
-                                original_has_jinja = True
-                                break
-                        if original_has_jinja:
-                            break
-                    if original_has_jinja:
-                        break
+        if lower_filename.endswith(".txt"):
+            template_text = template_bytes.decode("utf-8", errors="replace")
+            filled = generation.fill_template(template_text, context, prompt)
+            if isinstance(filled, str) and filled.startswith("Error:"):
+                return Response(content=filled, status_code=502, media_type="text/plain")
 
-            temp_doc = Document(io.BytesIO(rendered))
-            unfilled = any('{{' in para.text for para in temp_doc.paragraphs)
-            if not unfilled:
-                for table in temp_doc.tables:
-                    for row in table.rows:
-                        for cell in row.cells:
-                            if any('{{' in para.text for para in cell.paragraphs):
-                                unfilled = True
-                                break
-                        if unfilled:
-                            break
-                    if unfilled:
-                        break
+            if "{{" in filled or "}}" in filled or "___" in filled:
+                logger.warning("Text template still contains unresolved placeholders for %s", filename)
 
-            if unfilled or not original_has_jinja:
-                # For non-Jinja templates, use AI field mapping first, then heuristic fallback.
-                if not original_has_jinja:
-                    template_text_parts = [para.text for para in original_doc.paragraphs]
-                    for table in original_doc.tables:
-                        for row in table.rows:
-                            for cell in row.cells:
-                                template_text_parts.extend([para.text for para in cell.paragraphs])
-                    template_text = "\n".join([text for text in template_text_parts if text])
-                    mapping = generation.map_template_fields(template_text, required_fields)
-                    logger.info("Template mapping size: %s", len(mapping) if isinstance(mapping, dict) else 0)
-                    mapped = template_filler.fill_docx_with_mapping(template_bytes, extracted_data, mapping)
-                    filled = template_filler.fill_docx_heuristic(mapped, extracted_data)
-                else:
-                    # Preserve any Jinja substitutions, then fill remaining blanks/checkboxes.
-                    filled = template_filler.fill_docx_heuristic(rendered, extracted_data)
-            else:
-                filled = rendered
+            output_name = f"filled_{Path(filename).stem}.txt"
+            return Response(
+                content=filled,
+                media_type="text/plain; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{output_name}"'},
+            )
 
-            if filled == template_bytes:
-                logger.warning("Filled DOCX bytes unchanged for %s", filename)
+        if lower_filename.endswith(".docx"):
+            filled_docx = template_filler.fill_docx_intelligently(
+                original_template_bytes=template_bytes,
+                context=context,
+                extracted_data=extracted_data,
+            )
 
-            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-
-        elif lower_filename.endswith('.pdf'):
-            try:
-                filled = template_filler.fill_pdf_form(template_bytes, extracted_data)
-                media_type = "application/pdf"
-            except Exception as e:
-                logger.exception("PDF fill failed for %s: %s", filename, e)
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Could not fill PDF form: {str(e)}. "
-                        "Please use a fillable PDF form or DOCX template."
-                    ),
+            if not template_filler.validate_docx(filled_docx):
+                logger.error("Generated DOCX failed validation for file: %s", filename)
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "Generated document is corrupted. Please try again."},
                 )
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file type. Please upload .docx or .pdf")
 
-        return Response(
-            content=filled,
-            media_type=media_type,
-            headers={"Content-Disposition": f"attachment; filename=filled_{filename}"},
-        )
+            output_name = f"filled_{Path(filename).name}"
+            return Response(
+                content=filled_docx,
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": f'attachment; filename="{output_name}"'},
+            )
+
+        if lower_filename.endswith(".pdf"):
+            return JSONResponse(status_code=400, content={"error": "PDF filling not yet supported"})
+
+        return JSONResponse(status_code=400, content={"error": "Unsupported file type"})
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Unexpected fill-template failure: %s", e)
-        raise HTTPException(status_code=500, detail="Template filling failed due to an internal error")
+        logger.exception("Unexpected /api/fill-template failure: %s", e)
+        raise HTTPException(status_code=500, detail="Template filling failed due to an internal error.")
