@@ -1,8 +1,8 @@
 const API_BASE = 'http://localhost:8000/api';
 const PROMPT_DRAFT_KEY = 'landing-prompt-draft';
-const RESULT_CACHE_KEY = 'landing-result-html';
 const ERROR_CACHE_KEY = 'landing-error-message';
 const TEMPLATE_FILENAME_KEY = 'landing-template-filename';
+const ACTIVE_CONVERSATION_KEY = 'landing-active-conversation-id';
 
 document.addEventListener('DOMContentLoaded', () => {
     const promptForm = document.getElementById('prompt-form');
@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitButton = document.getElementById('submit-button');
     const fillTemplateButton = document.getElementById('fill-template-btn');
     const templateFileInput = document.getElementById('template-file');
+    const conversationList = document.getElementById('conversation-list');
+    const newChatButton = document.getElementById('new-chat-btn');
     const submitLabel = submitButton?.querySelector('[data-role="label"]');
     const submitSpinner = submitButton?.querySelector('[data-role="spinner"]');
     const backendStatus = document.getElementById('backend-status');
@@ -23,18 +25,44 @@ document.addEventListener('DOMContentLoaded', () => {
     const sidebarLinks = document.querySelectorAll('.sidebar-nav .sidebar-link');
     const SIDEBAR_STORAGE_KEY = 'landing-sidebar-collapsed';
     const collapseQuery = window.matchMedia('(max-width: 1024px)');
+
     let userPreferenceLocked = false;
     let hideSidebarTooltip = () => {};
     let activeController = null;
     let isProcessing = false;
     let activeOperation = null;
     let backendReady = false;
+    let currentConversationId = null;
+    let conversations = [];
+    let transientMessageId = 0;
+
+    if (promptForm) {
+        // Guard against accidental page reload if later init code throws.
+        promptForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+        }, { capture: true });
+    }
 
     setBackendReady(false, 'Checking backend status...');
 
     ensureStatusContainers();
     restoreDraftState();
-    void pollBackendHealth();
+    try {
+        initSidebar();
+        initSidebarTooltips();
+    } catch (error) {
+        console.warn('Sidebar init skipped due to runtime error:', error);
+    }
+
+    void initializeApp();
+
+    async function initializeApp() {
+        const isHealthy = await pollBackendHealth();
+        if (!isHealthy) {
+            return;
+        }
+        await refreshConversations();
+    }
 
     if (promptInput) {
         promptInput.addEventListener('input', () => {
@@ -48,6 +76,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? templateFileInput.files[0].name
                 : '';
             safeSet(TEMPLATE_FILENAME_KEY, selectedName);
+        });
+    }
+
+    if (newChatButton) {
+        newChatButton.addEventListener('click', async () => {
+            if (!backendReady || activeOperation) {
+                return;
+            }
+            currentConversationId = null;
+            persistActiveConversation(null);
+            renderMessages([]);
+            renderConversationList();
+            showError('');
+            promptInput?.focus();
         });
     }
 
@@ -79,6 +121,8 @@ document.addEventListener('DOMContentLoaded', () => {
             activeOperation = 'query';
             showLoading(true, 'query');
             safeSet(PROMPT_DRAFT_KEY, prompt);
+            appendMessageToFeed({ role: 'user', content: prompt, timestamp: new Date().toISOString() });
+            const pendingAssistantId = appendTypingMessage('AI is thinking...');
 
             const controller = new AbortController();
             activeController = controller;
@@ -92,6 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         },
                         body: JSON.stringify({
                             prompt,
+                            conversation_id: currentConversationId,
                             temperature: 0.2,
                         }),
                         signal: controller.signal,
@@ -104,9 +149,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 const data = await response.json();
-                clearResult();
-                displayResult(data);
+                if (typeof data.conversation_id === 'number') {
+                    currentConversationId = data.conversation_id;
+                    persistActiveConversation(currentConversationId);
+                }
+
+                removeTransientMessage(pendingAssistantId);
+                appendMessageToFeed({
+                    role: 'assistant',
+                    content: data.answer || 'Response received.',
+                    timestamp: new Date().toISOString(),
+                });
+
+                await refreshConversations(currentConversationId);
+                promptInput.value = '';
+                safeSet(PROMPT_DRAFT_KEY, '');
             } catch (error) {
+                removeTransientMessage(pendingAssistantId);
                 if (error.name === 'AbortError') {
                     showError('Prompt cancelled.');
                 } else {
@@ -150,11 +209,17 @@ document.addEventListener('DOMContentLoaded', () => {
             showError('');
             activeOperation = 'template';
             showLoading(true, 'template');
+            const userTemplateMessage = `Fill template request (${file.name}):\n${prompt}`;
+            appendMessageToFeed({ role: 'user', content: userTemplateMessage, timestamp: new Date().toISOString() });
+            const pendingTemplateId = appendTypingMessage('AI is filling the template...');
             try {
                 const response = await fetchWithStartupRetry(() => {
                     const formData = new FormData();
                     formData.append('file', file);
                     formData.append('prompt', prompt);
+                    if (Number.isFinite(currentConversationId)) {
+                        formData.append('conversation_id', String(currentConversationId));
+                    }
                     return fetch(`${API_BASE}/fill-template`, {
                         method: 'POST',
                         body: formData,
@@ -163,26 +228,291 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 if (!response.ok) {
                     const errorText = await response.text();
-                    throw new Error(errorText || 'Template filling failed');
+                    throw new Error(errorText || 'Template filling failed.');
                 }
 
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `filled_${file.name}`;
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(url);
+                const data = await response.json();
+                if (typeof data.conversation_id === 'number') {
+                    currentConversationId = data.conversation_id;
+                    persistActiveConversation(currentConversationId);
+                }
+
+                removeTransientMessage(pendingTemplateId);
+                appendMessageToFeed({
+                    role: 'assistant',
+                    content: data.answer || 'Template ready. Download from the attachment below.',
+                    timestamp: new Date().toISOString(),
+                    attachment_id: data.attachment_id,
+                    attachment_filename: data.attachment_filename,
+                });
+
+                templateFileInput.value = '';
+                safeSet(TEMPLATE_FILENAME_KEY, '');
                 showError('');
+                await refreshConversations(currentConversationId);
             } catch (error) {
+                removeTransientMessage(pendingTemplateId);
                 showError(error.message || 'Template filling failed');
             } finally {
                 showLoading(false, 'template');
                 activeOperation = null;
             }
         });
+    }
+
+    async function refreshConversations(preferredId = null) {
+        try {
+            const response = await fetch(`${API_BASE}/conversations`, {
+                method: 'GET',
+                cache: 'no-store',
+            });
+            if (!response.ok) {
+                throw new Error(`Unable to load conversations (${response.status})`);
+            }
+
+            conversations = await response.json();
+            const restoredId = readPersistedActiveConversation();
+            const targetId = preferredId ?? currentConversationId ?? restoredId;
+            const hasTarget = conversations.some((conv) => conv.id === targetId);
+
+            if (hasTarget) {
+                currentConversationId = targetId;
+            } else if (conversations.length > 0) {
+                currentConversationId = conversations[0].id;
+            } else {
+                currentConversationId = null;
+            }
+
+            persistActiveConversation(currentConversationId);
+            renderConversationList();
+
+            if (currentConversationId !== null) {
+                await loadConversationMessages(currentConversationId);
+            } else {
+                renderMessages([]);
+            }
+        } catch (error) {
+            showError(error.message || 'Failed to load conversation history.');
+        }
+    }
+
+    async function loadConversationMessages(conversationId) {
+        const response = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
+            method: 'GET',
+            cache: 'no-store',
+        });
+
+        if (!response.ok) {
+            throw new Error(`Unable to load messages (${response.status})`);
+        }
+
+        const messages = await response.json();
+        renderMessages(messages);
+    }
+
+    async function removeConversation(conversationId) {
+        const response = await fetch(`${API_BASE}/conversations/${conversationId}`, {
+            method: 'DELETE',
+        });
+
+        if (!response.ok) {
+            throw new Error(`Unable to delete conversation (${response.status})`);
+        }
+    }
+
+    function renderConversationList() {
+        if (!conversationList) {
+            return;
+        }
+
+        conversationList.innerHTML = '';
+
+        if (!Array.isArray(conversations) || conversations.length === 0) {
+            const item = document.createElement('li');
+            item.className = 'chat-thread__empty';
+            item.textContent = 'No conversations yet. Start with New Chat.';
+            conversationList.appendChild(item);
+            return;
+        }
+
+        conversations.forEach((conv) => {
+            const li = document.createElement('li');
+            li.className = 'chat-thread__row';
+
+            const itemButton = document.createElement('button');
+            itemButton.type = 'button';
+            itemButton.className = 'chat-thread__item';
+            if (conv.id === currentConversationId) {
+                itemButton.classList.add('is-active');
+            }
+
+            const title = (conv.title || '').trim() || `Conversation ${conv.id}`;
+            const preview = truncateForPreview(conv.preview || '', 58);
+
+            itemButton.innerHTML = `
+                <div class="chat-thread__meta">
+                    <span class="chat-thread__label">${escapeHtml(title)}</span>
+                </div>
+                <p class="chat-thread__preview">${escapeHtml(preview || 'No messages yet')}</p>
+            `;
+
+            itemButton.addEventListener('click', async () => {
+                if (activeOperation) {
+                    return;
+                }
+                currentConversationId = conv.id;
+                persistActiveConversation(currentConversationId);
+                renderConversationList();
+                try {
+                    await loadConversationMessages(conv.id);
+                    showError('');
+                } catch (error) {
+                    showError(error.message || 'Failed to load conversation messages.');
+                }
+            });
+
+            const deleteButton = document.createElement('button');
+            deleteButton.type = 'button';
+            deleteButton.className = 'chat-thread__delete';
+            deleteButton.setAttribute('aria-label', `Delete conversation ${title}`);
+            deleteButton.innerHTML = `
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM7 9h2v9H7V9Z" fill="currentColor"></path>
+                </svg>
+            `;
+
+            deleteButton.addEventListener('click', async (event) => {
+                event.stopPropagation();
+                if (activeOperation) {
+                    return;
+                }
+                const confirmDelete = window.confirm('Delete this conversation and all its messages?');
+                if (!confirmDelete) {
+                    return;
+                }
+
+                try {
+                    await removeConversation(conv.id);
+                    if (currentConversationId === conv.id) {
+                        currentConversationId = null;
+                        persistActiveConversation(null);
+                    }
+                    await refreshConversations();
+                    showError('');
+                } catch (error) {
+                    showError(error.message || 'Failed to delete conversation.');
+                }
+            });
+
+            li.append(itemButton, deleteButton);
+            conversationList.appendChild(li);
+        });
+    }
+
+    function renderMessages(messages) {
+        if (!resultContainer) {
+            return;
+        }
+
+        resultContainer.innerHTML = '';
+
+        if (!Array.isArray(messages) || messages.length === 0) {
+            updateFeedPlaceholder();
+            return;
+        }
+
+        messages.forEach((message) => {
+            appendMessageToFeed(message);
+        });
+
+        resultContainer.scrollTop = resultContainer.scrollHeight;
+        updateFeedPlaceholder();
+    }
+
+    function appendMessageToFeed(message) {
+        if (!resultContainer) {
+            return null;
+        }
+
+        const role = message.role === 'assistant' ? 'assistant' : 'user';
+        const wrapper = document.createElement('article');
+        wrapper.className = `chat-message chat-message--${role}`;
+        if (message._transientId) {
+            wrapper.setAttribute('data-transient-id', String(message._transientId));
+        }
+
+        const roleLabel = document.createElement('p');
+        roleLabel.className = 'chat-message__role';
+        roleLabel.textContent = role === 'assistant' ? 'Assistant' : 'You';
+
+        const bubble = document.createElement('div');
+        bubble.className = `chat-message__bubble${message.isTyping ? ' chat-message__bubble--typing' : ''}`;
+        if (message.isTyping) {
+            bubble.innerHTML = `
+                <span class="chat-message__typing-label">${escapeHtml(message.content || 'Processing...')}</span>
+                <span class="typing-dots" aria-hidden="true">
+                    <span></span><span></span><span></span>
+                </span>
+            `;
+        } else {
+            bubble.textContent = message.content || '';
+        }
+
+        wrapper.append(roleLabel, bubble);
+
+        if (message.attachment_id) {
+            const attachment = document.createElement('a');
+            attachment.className = 'chat-message__attachment';
+            attachment.href = `${API_BASE}/attachments/${message.attachment_id}/download`;
+            attachment.textContent = `Download: ${message.attachment_filename || 'filled-template'}`;
+            attachment.setAttribute('download', message.attachment_filename || 'filled-template');
+            wrapper.appendChild(attachment);
+        }
+
+        const meta = document.createElement('p');
+        meta.className = 'chat-message__time';
+        meta.textContent = formatTimestamp(message.timestamp);
+        wrapper.appendChild(meta);
+
+        resultContainer.appendChild(wrapper);
+        resultContainer.scrollTop = resultContainer.scrollHeight;
+        updateFeedPlaceholder();
+        return wrapper;
+    }
+
+    function appendTypingMessage(labelText) {
+        transientMessageId += 1;
+        const id = `typing-${transientMessageId}`;
+        appendMessageToFeed({
+            role: 'assistant',
+            content: labelText,
+            isTyping: true,
+            timestamp: new Date().toISOString(),
+            _transientId: id,
+        });
+        return id;
+    }
+
+    function removeTransientMessage(id) {
+        if (!resultContainer || !id) {
+            return;
+        }
+        const target = resultContainer.querySelector(`[data-transient-id="${id}"]`);
+        if (target) {
+            target.remove();
+            updateFeedPlaceholder();
+        }
+    }
+
+    function truncateForPreview(value, maxLength = 60) {
+        const normalized = String(value || '').replace(/\s+/g, ' ').trim();
+        if (!normalized) {
+            return '';
+        }
+        if (normalized.length <= maxLength) {
+            return normalized;
+        }
+        return `${normalized.slice(0, maxLength - 1)}...`;
     }
 
     function cancelActiveRequest() {
@@ -224,6 +554,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (templateFileInput) {
             templateFileInput.disabled = !backendReady || isLoading;
         }
+
+        if (newChatButton) {
+            newChatButton.disabled = !backendReady || isLoading;
+        }
     }
 
     async function pollBackendHealth() {
@@ -241,7 +575,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const payload = await response.json();
                     if (payload && payload.status === 'healthy' && payload.ready === true) {
                         setBackendReady(true, `Backend connected (v${payload.version || 'unknown'}).`);
-                        return;
+                        return true;
                     }
 
                     if (payload && payload.status === 'starting') {
@@ -260,6 +594,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         setBackendReady(false, 'Backend unavailable. Start the API server and refresh this page.');
         showError('Backend health check failed after multiple attempts.');
+        return false;
     }
 
     function setBackendReady(isReady, message) {
@@ -290,10 +625,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (templateFileInput) {
             templateFileInput.disabled = !isReady;
         }
+        if (newChatButton) {
+            newChatButton.disabled = !isReady;
+        }
     }
 
     function showError(message) {
-        if (!errorContainer) return;
+        if (!errorContainer) {
+            return;
+        }
         if (!message) {
             errorContainer.textContent = '';
             errorContainer.classList.add('hidden');
@@ -305,82 +645,6 @@ document.addEventListener('DOMContentLoaded', () => {
         errorContainer.textContent = message;
         errorContainer.classList.remove('hidden');
         safeSet(ERROR_CACHE_KEY, message);
-        updateFeedPlaceholder();
-    }
-
-    function displayResult(data) {
-        if (!resultContainer || !data) {
-            return;
-        }
-
-        const fragments = [];
-
-        const answerCard = document.createElement('div');
-        answerCard.className = 'rounded-2xl border border-slate-200 dark:border-white/10 bg-white/80 dark:bg-white/5 px-5 py-4';
-
-        const answerLabel = document.createElement('div');
-        answerLabel.className = 'text-sm uppercase tracking-[0.35em] text-slate-400 mb-3';
-        answerLabel.textContent = 'Generated CFIR';
-
-        const answerBody = document.createElement('div');
-        answerBody.className = 'prose prose-slate dark:prose-invert whitespace-pre-wrap text-sm sm:text-base';
-        answerBody.textContent = data.answer;
-
-        answerCard.append(answerLabel, answerBody);
-        fragments.push(answerCard);
-
-        if (Array.isArray(data.sources) && data.sources.length > 0) {
-            const sourcesWrapper = document.createElement('div');
-            sourcesWrapper.className = 'rounded-2xl border border-slate-200 dark:border-white/10 px-5 py-4 space-y-3';
-            const heading = document.createElement('p');
-            heading.className = 'text-sm font-semibold text-slate-700 dark:text-slate-100';
-            heading.textContent = 'Evidence excerpts';
-            sourcesWrapper.appendChild(heading);
-
-            data.sources.forEach((source) => {
-                const item = document.createElement('div');
-                item.className = 'rounded-xl bg-slate-50 dark:bg-white/5 px-4 py-3 text-sm text-slate-600 dark:text-slate-200';
-
-                const title = document.createElement('div');
-                title.className = 'font-medium text-brand-foam mb-1';
-                title.textContent = `📁 ${source.filename}`;
-                item.appendChild(title);
-
-                const snippet = document.createElement('p');
-                snippet.className = 'text-slate-500 dark:text-slate-300';
-                snippet.textContent = source.snippet;
-                item.appendChild(snippet);
-
-                if (source.relevance_score) {
-                    const score = document.createElement('p');
-                    score.className = 'text-xs text-slate-400 mt-1';
-                    score.textContent = `Relevance: ${(source.relevance_score * 100).toFixed(1)}%`;
-                    item.appendChild(score);
-                }
-
-                sourcesWrapper.appendChild(item);
-            });
-
-            fragments.push(sourcesWrapper);
-        }
-
-        if (data.processing_time_ms) {
-            const meta = document.createElement('div');
-            meta.className = 'text-xs text-right text-slate-400';
-            meta.textContent = `Processed in ${data.processing_time_ms} ms`;
-            fragments.push(meta);
-        }
-
-        resultContainer.append(...fragments);
-        resultContainer.scrollTop = resultContainer.scrollHeight;
-        safeSet(RESULT_CACHE_KEY, resultContainer.innerHTML);
-        updateFeedPlaceholder();
-    }
-
-    function clearResult() {
-        if (!resultContainer) return;
-        resultContainer.innerHTML = '';
-        safeSet(RESULT_CACHE_KEY, '');
         updateFeedPlaceholder();
     }
 
@@ -457,11 +721,6 @@ document.addEventListener('DOMContentLoaded', () => {
             promptInput.value = draftPrompt;
         }
 
-        const cachedResult = safeGet(RESULT_CACHE_KEY);
-        if (resultContainer && cachedResult) {
-            resultContainer.innerHTML = cachedResult;
-        }
-
         const cachedError = safeGet(ERROR_CACHE_KEY);
         if (cachedError) {
             showError(cachedError);
@@ -514,6 +773,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function readPersistedActiveConversation() {
+        const value = safeGet(ACTIVE_CONVERSATION_KEY);
+        if (!value) {
+            return null;
+        }
+        const parsed = Number.parseInt(value, 10);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function persistActiveConversation(id) {
+        if (id === null || id === undefined) {
+            safeSet(ACTIVE_CONVERSATION_KEY, '');
+            return;
+        }
+        safeSet(ACTIVE_CONVERSATION_KEY, String(id));
+    }
+
     function updateFeedPlaceholder() {
         if (!feedPlaceholder) {
             return;
@@ -524,8 +800,27 @@ document.addEventListener('DOMContentLoaded', () => {
         feedPlaceholder.classList.toggle('hidden', shouldHide);
     }
 
-    initSidebar();
-    initSidebarTooltips();
+    function formatTimestamp(timestamp) {
+        if (!timestamp) {
+            return 'Now';
+        }
+
+        const parsed = new Date(timestamp);
+        if (Number.isNaN(parsed.getTime())) {
+            return 'Now';
+        }
+
+        return parsed.toLocaleString();
+    }
+
+    function escapeHtml(value) {
+        return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
+    }
 
     function initSidebar() {
         if (!sidebar) {
