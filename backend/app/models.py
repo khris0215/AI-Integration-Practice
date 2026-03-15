@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class QueryRequest(BaseModel):
     prompt: str
+    conversation_id: Optional[int] = None
     model: Optional[str] = "phi4:14b-q4_K_M"
     temperature: Optional[float] = 0.2
     max_tokens: Optional[int] = 1000
@@ -19,4 +20,5 @@ class SourceDocument(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     sources: List[SourceDocument]
+    conversation_id: int
     processing_time_ms: Optional[int] = None

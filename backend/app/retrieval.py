@@ -55,6 +55,19 @@ FRAUD_TERMS = {
     "insider threat": ["insider threat", "insider"],
 }
 
+INCIDENT_INTENT_TERMS = {
+    "incident", "fraud", "cfir", "sar", "case", "report", "template", "investigation",
+    "phishing", "ransomware", "breach", "malware", "compromise", "credential", "wire",
+}
+
+FILE_RETRIEVAL_ACTION_TERMS = {
+    "pull", "get", "download", "retrieve", "open", "show", "export",
+}
+
+FILE_RETRIEVAL_OBJECT_TERMS = {
+    "file", "report", "incident", "case", "document", "doc", "record",
+}
+
 def get_embeddings():
     global _EMBEDDINGS
     if _EMBEDDINGS is None:
@@ -144,6 +157,60 @@ def _has_temporal_constraint(constraints: dict) -> bool:
 
 def query_has_temporal_constraint(query: str) -> bool:
     return _has_temporal_constraint(_extract_constraints(query))
+
+
+def should_use_incident_rag(query: str) -> bool:
+    text = (query or "").lower().strip()
+    if not text:
+        return False
+
+    if _fraud_keywords(text):
+        return True
+
+    tokens = _query_tokens(text)
+    if any(token in INCIDENT_INTENT_TERMS for token in tokens):
+        return True
+
+    constraints = _extract_constraints(text)
+    return _has_temporal_constraint(constraints)
+
+
+def should_return_incident_file(query: str) -> bool:
+    tokens = _query_tokens(query)
+    if not tokens:
+        return False
+
+    has_action = any(token in FILE_RETRIEVAL_ACTION_TERMS for token in tokens)
+    has_object = any(token in FILE_RETRIEVAL_OBJECT_TERMS for token in tokens)
+    return has_action and has_object
+
+
+def suggest_similar_incident_files(query: str, limit: int = 3) -> list[str]:
+    constraints = _extract_constraints(query)
+    q_tokens = _query_tokens(query)
+    scored: list[tuple[str, float]] = []
+
+    for file_path in DATA_PATH.glob("*"):
+        if not file_path.is_file() or file_path.suffix.lower() not in {".txt"}:
+            continue
+
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore").lower()
+        except Exception:
+            continue
+
+        lexical_hits = sum(1 for token in q_tokens if token in text)
+        lexical_ratio = lexical_hits / max(len(q_tokens), 1) if q_tokens else 0.0
+        temporal_score = 1.0 if _doc_matches_temporal(text, constraints) else 0.0
+        fraud_score = 1.0 if _doc_matches_fraud(text, constraints) else 0.0
+        score = (0.6 * lexical_ratio) + (0.25 * temporal_score) + (0.15 * fraud_score)
+        if score <= 0:
+            continue
+
+        scored.append((file_path.name, float(score)))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    return [name for name, _ in scored[:max(limit, 1)]]
 
 
 def _is_live_source(doc) -> bool:
@@ -298,13 +365,33 @@ def _score_chunk(query: str, doc_text: str, base_score: float) -> float:
     # Blend semantic score with exact-term matching, strongly preferring temporal matches.
     return float(base_score) + (0.20 * lexical_ratio) + (0.55 * temporal_ratio) + (0.25 * fraud_ratio)
 
+
+def _normalize_semantic_score(raw_distance: float) -> float:
+    """Convert vector distance to a bounded relevance-like score where higher is better."""
+    safe_distance = max(float(raw_distance), 0.0)
+    return 1.0 / (1.0 + safe_distance)
+
+
+def _dedupe_results(results: list[tuple]) -> list[tuple]:
+    """Remove duplicate chunks while keeping the strongest score per unique source/content."""
+    best_by_key = {}
+    for doc, score in results:
+        source = (doc.metadata or {}).get("source", "")
+        content = (doc.page_content or "").strip()
+        dedupe_key = (str(source), content)
+        existing = best_by_key.get(dedupe_key)
+        if existing is None or float(score) > float(existing[1]):
+            best_by_key[dedupe_key] = (doc, float(score))
+    return list(best_by_key.values())
+
 def retrieve_relevant_chunks(query, k=10):
     db = get_vector_store()
     constraints = _extract_constraints(query)
 
     # Pull many candidates so the reranker can find date/type matches reliably.
     candidate_count = max(k * 5, 24)
-    raw_results = db.similarity_search_with_relevance_scores(query, k=candidate_count)
+    raw_results = db.similarity_search_with_score(query, k=candidate_count)
+    raw_results = [(doc, _normalize_semantic_score(distance)) for doc, distance in raw_results]
 
     # Remove stale vectors that point to non-existent source files.
     live_results = [(doc, score) for doc, score in raw_results if _is_live_source(doc)]
@@ -312,10 +399,12 @@ def retrieve_relevant_chunks(query, k=10):
         logger.warning("All retrieved chunks were stale. Rebuilding vector store and retrying query=%r", query)
         create_vector_store()
         db = get_vector_store()
-        raw_results = db.similarity_search_with_relevance_scores(query, k=candidate_count)
+        raw_results = db.similarity_search_with_score(query, k=candidate_count)
+        raw_results = [(doc, _normalize_semantic_score(distance)) for doc, distance in raw_results]
         live_results = [(doc, score) for doc, score in raw_results if _is_live_source(doc)]
 
     raw_results = live_results
+    raw_results = _dedupe_results(raw_results)
 
     reranked = []
     for doc, score in raw_results:

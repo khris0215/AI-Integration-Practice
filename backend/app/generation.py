@@ -241,6 +241,113 @@ Actions taken: [copy from context]
         return f"Error generating response: {str(e)}"
 
 
+def chat_response(
+    conversation_history: str,
+    context: str,
+    latest_user_prompt: str,
+    use_incident_context: bool = True,
+    model: str = MODEL,
+    temperature: float = 0.2,
+    max_tokens: int = 450,
+) -> str:
+    incident_context_mode = "enabled" if use_incident_context else "disabled"
+    style_instruction = (
+        "Answer in 1-3 short sentences unless the user explicitly asks for a detailed report."
+        if not use_incident_context
+        else "Prefer precise, concise incident answers."
+    )
+
+    prompt = f"""You are an AI assistant helping with fraud incidents.
+Answer ONLY the latest user prompt.
+
+Rules:
+- Do not continue prior tasks unless the latest user prompt explicitly asks to continue them.
+- Do not append extra summaries from earlier turns when they are unrelated.
+- If the latest user prompt is general (for example spelling/grammar wording), answer it directly and briefly.
+- Retrieval context mode is {incident_context_mode}. If mode is disabled, do not reference incident reports unless user explicitly asks for them.
+- Use document context only when needed for the latest prompt.
+- If multiple incidents match, ask one concise clarification question (for example date, incident ID, or type).
+- Do not invent facts that are not present in context.
+- {style_instruction}
+
+Latest user prompt:
+{latest_user_prompt}
+
+Conversation history:
+{conversation_history}
+
+Relevant documents:
+{context}
+
+Now provide your response to the latest user turn:
+"""
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "max_tokens": max(80, int(max_tokens)),
+        },
+    }
+
+    try:
+        response = _ollama_post(payload)
+        response.raise_for_status()
+        return str(response.json().get("response", "")).strip()
+    except requests.exceptions.ConnectionError:
+        return "Error: Cannot connect to Ollama. Is it running? (Run 'ollama serve')"
+    except requests.exceptions.ReadTimeout:
+        return "Error: Ollama timed out while generating. Try again or reduce prompt size."
+    except Exception as exc:
+        return f"Error generating response: {str(exc)}"
+
+
+def generate_conversation_title(
+    conversation_history: str,
+    model: str = MODEL,
+) -> str:
+    prompt = f"""Generate a short conversation title for this fraud investigation chat.
+Rules:
+- Return only the title, no quotes.
+- 4 to 10 words.
+- Be specific and accurate to the main incident.
+- No trailing punctuation.
+
+Conversation:
+{conversation_history}
+
+Title:
+"""
+
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "max_tokens": 30,
+        },
+    }
+
+    try:
+        response = _ollama_post(payload, read_timeout=60)
+        response.raise_for_status()
+        raw = str(response.json().get("response", "")).strip()
+        if not raw:
+            return ""
+
+        title = raw.splitlines()[0].strip().strip('"').strip("'")
+        title = re.sub(r"\s+", " ", title)
+        title = re.sub(r"[\.:;,_\-]+$", "", title)
+        if len(title) < 4:
+            return ""
+        return title[:120]
+    except Exception:
+        return ""
+
+
 def fill_template(template: str, context: str, query: str, model: str = MODEL, temperature: float = 0.0) -> str:
     fields = [
         "incident_id",
