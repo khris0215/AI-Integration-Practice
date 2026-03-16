@@ -24,7 +24,11 @@ if %errorlevel%==0 (
 	start "Frontend" /D "%ROOT%frontend" cmd /k "python -m http.server 5500"
 )
 
-start "Watcher" /D "%ROOT%backend" cmd /k "call venv\Scripts\activate && python watcher.py"
+if /I "%START_WATCHER%"=="1" (
+	start "Watcher" /D "%ROOT%backend" cmd /k "call venv\Scripts\activate && python watcher.py"
+) else (
+	echo [INFO] Watcher disabled by default. Set START_WATCHER=1 to enable it.
+)
 
 goto :eof
 

@@ -3,6 +3,8 @@ import logging
 import re
 import shutil
 import importlib
+import threading
+import time
 from langchain_core.documents import Document
 
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader
@@ -25,6 +27,9 @@ DATA_PATH = PROJECT_ROOT / "file_dump"
 logger = logging.getLogger(__name__)
 _EMBEDDINGS = None
 _VECTOR_STORE = None
+_RETRIEVAL_CACHE = {}
+_RETRIEVAL_CACHE_LOCK = threading.Lock()
+_RETRIEVAL_CACHE_TTL_SECONDS = 90
 
 MONTHS = {
     "january", "february", "march", "april", "may", "june",
@@ -103,10 +108,21 @@ def create_vector_store():
             filename = Path(source_path).name
             chunk.page_content = f"[Filename: {filename}]\n{chunk.page_content}"
     embeddings = get_embeddings()
-    vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_PATH)
+    vectorstore = Chroma.from_documents(
+        chunks,
+        embeddings,
+        persist_directory=CHROMA_PATH,
+        collection_metadata={
+            "hnsw:space": "cosine",
+            "hnsw:M": 32,
+            "hnsw:ef_construction": 200,
+        },
+    )
     if hasattr(vectorstore, "persist"):
         vectorstore.persist()
     _VECTOR_STORE = vectorstore
+    with _RETRIEVAL_CACHE_LOCK:
+        _RETRIEVAL_CACHE.clear()
     print(f"Stored {len(chunks)} chunks.")
     return vectorstore
 
@@ -384,7 +400,39 @@ def _dedupe_results(results: list[tuple]) -> list[tuple]:
             best_by_key[dedupe_key] = (doc, float(score))
     return list(best_by_key.values())
 
+
+def _cache_key(query: str, k: int) -> tuple:
+    return (str(query or "").strip().lower(), int(k))
+
+
+def _get_cached_results(query: str, k: int) -> list[tuple] | None:
+    key = _cache_key(query, k)
+    now = time.time()
+    with _RETRIEVAL_CACHE_LOCK:
+        cached = _RETRIEVAL_CACHE.get(key)
+        if not cached:
+            return None
+        expires_at = float(cached.get("expires_at", 0.0))
+        if expires_at <= now:
+            _RETRIEVAL_CACHE.pop(key, None)
+            return None
+        return list(cached.get("results", []))
+
+
+def _set_cached_results(query: str, k: int, results: list[tuple]) -> None:
+    key = _cache_key(query, k)
+    with _RETRIEVAL_CACHE_LOCK:
+        _RETRIEVAL_CACHE[key] = {
+            "expires_at": time.time() + _RETRIEVAL_CACHE_TTL_SECONDS,
+            "results": list(results),
+        }
+
 def retrieve_relevant_chunks(query, k=10):
+    cached = _get_cached_results(query, k)
+    if cached is not None:
+        logger.info("retrieve_relevant_chunks cache_hit query=%r k=%s", query, k)
+        return cached
+
     db = get_vector_store()
     constraints = _extract_constraints(query)
 
@@ -427,8 +475,10 @@ def retrieve_relevant_chunks(query, k=10):
         fallback = _build_file_scan_candidates(query, k)
         if fallback:
             logger.info("Vector retrieval found no temporal match; file-scan fallback returned %s chunks", len(fallback))
+            _set_cached_results(query, k, fallback)
             return fallback
         logger.info("No temporal match found for query=%r; returning no chunks", query)
+        _set_cached_results(query, k, [])
         return []
     else:
         working_set = reranked
@@ -444,4 +494,5 @@ def retrieve_relevant_chunks(query, k=10):
         len(temporal_only_matches),
         len(selected),
     )
+    _set_cached_results(query, k, selected)
     return selected

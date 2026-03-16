@@ -5,9 +5,9 @@ import re
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "phi4:14b-q4_K_M"
+MODEL = "mistral:7b"
 OLLAMA_CONNECT_TIMEOUT_S = 10
-OLLAMA_READ_TIMEOUT_S = 300
+OLLAMA_READ_TIMEOUT_S = 60
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXTRACTION_FIELDS = [
@@ -236,7 +236,7 @@ Actions taken: [copy from context]
     except requests.exceptions.ConnectionError:
         return "Error: Cannot connect to Ollama. Is it running? (Run 'ollama serve')"
     except requests.exceptions.ReadTimeout:
-        return "Error: Ollama timed out while generating. Phi4 can be slower; try again or reduce prompt size."
+        return "Error: Ollama timed out while generating. Try again or reduce prompt size."
     except Exception as e:
         return f"Error generating response: {str(e)}"
 
