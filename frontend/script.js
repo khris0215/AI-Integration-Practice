@@ -3,8 +3,66 @@ const PROMPT_DRAFT_KEY = 'landing-prompt-draft';
 const ERROR_CACHE_KEY = 'landing-error-message';
 const TEMPLATE_FILENAME_KEY = 'landing-template-filename';
 const ACTIVE_CONVERSATION_KEY = 'landing-active-conversation-id';
+const APP_INIT_GUARD_KEY = '__landingAppInitialized';
+const QUERY_TIMEOUT_MS = 180000;
+
+if (typeof window._backendHealthy !== 'boolean') {
+    window._backendHealthy = false;
+}
+
+let initCount = 0;
+const INIT_STACK = [];
+
+function diagTimestamp() {
+    return new Date().toISOString();
+}
+
+function diagLog(level, message, ...args) {
+    const fn = console[level] || console.log;
+    fn(`[${diagTimestamp()}] ${message}`, ...args);
+}
+
+function logInit(reason) {
+    initCount += 1;
+    const stack = new Error().stack || '';
+    const entry = {
+        count: initCount,
+        reason,
+        stack,
+        time: Date.now(),
+    };
+    INIT_STACK.push(entry);
+    window.__landingInitDiagnostics = {
+        initCount,
+        history: [...INIT_STACK],
+    };
+    diagLog('warn', `[INIT] #${initCount} reason=${reason}`, entry);
+}
 
 document.addEventListener('DOMContentLoaded', () => {
+    logInit('DOMContentLoaded');
+
+    if (window[APP_INIT_GUARD_KEY]) {
+        diagLog('warn', 'Landing app already initialized. Skipping duplicate bootstrap.');
+        return;
+    }
+    window[APP_INIT_GUARD_KEY] = true;
+
+    const scriptCount = document.querySelectorAll('script[src$="script.js"]').length;
+    diagLog('warn', `script.js tag count = ${scriptCount}`);
+
+    window.addEventListener('beforeunload', () => {
+        diagLog('warn', 'Page is being unloaded/reloaded.');
+    });
+
+    window.addEventListener('error', (event) => {
+        diagLog('error', 'Unhandled window error:', event.message, event.error);
+    });
+
+    window.addEventListener('unhandledrejection', (event) => {
+        diagLog('error', 'Unhandled promise rejection:', event.reason);
+    });
+
     const promptForm = document.getElementById('prompt-form');
     const promptInput = document.getElementById('prompt-input');
     const resultContainer = document.getElementById('result-container');
@@ -31,10 +89,17 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeController = null;
     let isProcessing = false;
     let activeOperation = null;
-    let backendReady = false;
+    let backendReady = Boolean(window._backendHealthy);
     let currentConversationId = null;
     let conversations = [];
     let transientMessageId = 0;
+    let healthPollStarted = false;
+    let healthPollPromise = null;
+    let loadingStartedAtMs = 0;
+    let loadingElapsedInterval = null;
+    let loadingProgressTrack = null;
+    let loadingProgressFill = null;
+    let loadingElapsedText = null;
 
     if (promptForm) {
         // Guard against accidental page reload if later init code throws.
@@ -43,7 +108,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { capture: true });
     }
 
-    setBackendReady(false, 'Checking backend status...');
+    if (backendStatus && !backendReady) {
+        backendStatus.textContent = 'Checking backend status...';
+        backendStatus.classList.remove('hidden');
+    }
 
     ensureStatusContainers();
     restoreDraftState();
@@ -57,11 +125,21 @@ document.addEventListener('DOMContentLoaded', () => {
     void initializeApp();
 
     async function initializeApp() {
-        const isHealthy = await pollBackendHealth();
+        logInit('initializeApp');
+        const isHealthy = await startHealthPollOnce();
         if (!isHealthy) {
             return;
         }
         await refreshConversations();
+    }
+
+    function startHealthPollOnce() {
+        if (healthPollStarted && healthPollPromise) {
+            return healthPollPromise;
+        }
+        healthPollStarted = true;
+        healthPollPromise = pollBackendHealth();
+        return healthPollPromise;
     }
 
     if (promptInput) {
@@ -95,88 +173,113 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (promptForm && promptInput) {
         promptForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            if (activeOperation === 'query') {
-                cancelActiveRequest();
-                return;
-            }
-            if (activeOperation && activeOperation !== 'query') {
-                showError('Template filling is in progress. Please wait for it to finish.');
-                return;
-            }
-
-            const prompt = promptInput.value.trim();
-
-            if (!backendReady) {
-                showError('Backend is still starting. Please wait until status shows connected.');
-                return;
-            }
-
-            if (!prompt) {
-                showError('Please describe the fraud scenario you want to generate.');
-                return;
-            }
-
-            showError('');
-            activeOperation = 'query';
-            showLoading(true, 'query');
-            safeSet(PROMPT_DRAFT_KEY, prompt);
-            appendMessageToFeed({ role: 'user', content: prompt, timestamp: new Date().toISOString() });
-            const pendingAssistantId = appendTypingMessage('AI is thinking...');
-
-            const controller = new AbortController();
-            activeController = controller;
-
             try {
-                const response = await fetchWithStartupRetry(
-                    () => fetch(`${API_BASE}/query`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            prompt,
-                            conversation_id: currentConversationId,
-                            temperature: 0.2,
-                        }),
-                        signal: controller.signal,
-                    }),
-                    controller.signal,
-                );
-
-                if (!response.ok) {
-                    throw new Error(`API error: ${response.status}`);
-                }
-
-                const data = await response.json();
-                if (typeof data.conversation_id === 'number') {
-                    currentConversationId = data.conversation_id;
-                    persistActiveConversation(currentConversationId);
-                }
-
-                removeTransientMessage(pendingAssistantId);
-                appendMessageToFeed({
-                    role: 'assistant',
-                    content: data.answer || 'Response received.',
-                    timestamp: new Date().toISOString(),
+                event.preventDefault();
+                diagLog('log', 'submit start', {
+                    activeOperation,
+                    backendReady,
+                    currentConversationId,
                 });
+                if (activeOperation === 'query') {
+                    cancelActiveRequest();
+                    return;
+                }
+                if (activeOperation && activeOperation !== 'query') {
+                    showError('Template filling is in progress. Please wait for it to finish.');
+                    return;
+                }
 
-                await refreshConversations(currentConversationId);
-                promptInput.value = '';
-                safeSet(PROMPT_DRAFT_KEY, '');
+                const prompt = promptInput.value.trim();
+
+                if (!backendReady) {
+                    showError('Backend is still starting. Please wait until status shows connected.');
+                    return;
+                }
+
+                if (!prompt) {
+                    showError('Please describe the fraud scenario you want to generate.');
+                    return;
+                }
+
+                showError('');
+                activeOperation = 'query';
+                showLoading(true, 'query');
+                safeSet(PROMPT_DRAFT_KEY, prompt);
+                appendMessageToFeed({ role: 'user', content: prompt, timestamp: new Date().toISOString() });
+                const pendingAssistantId = appendTypingMessage('AI is thinking...');
+
+                const controller = new AbortController();
+                activeController = controller;
+
+                try {
+                    diagLog('log', 'submit fetch start', {
+                        promptLength: prompt.length,
+                        currentConversationId,
+                    });
+                    const response = await fetchWithStartupRetry(
+                        (requestSignal) => fetch(`${API_BASE}/query`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                prompt,
+                                conversation_id: currentConversationId,
+                                temperature: 0.2,
+                            }),
+                            signal: requestSignal,
+                        }),
+                        controller.signal,
+                    );
+
+                    if (!response.ok) {
+                        throw new Error(`API error: ${response.status}`);
+                    }
+
+                    diagLog('log', 'submit fetch success', { status: response.status });
+
+                    const data = await response.json();
+                    if (typeof data.conversation_id === 'number') {
+                        const previousConversationId = currentConversationId;
+                        currentConversationId = data.conversation_id;
+                        persistActiveConversation(currentConversationId);
+                        diagLog('log', 'conversation id changed after query', {
+                            previousConversationId,
+                            currentConversationId,
+                        });
+                    }
+
+                    removeTransientMessage(pendingAssistantId);
+                    appendMessageToFeed({
+                        role: 'assistant',
+                        content: data.answer || 'Response received.',
+                        timestamp: new Date().toISOString(),
+                    });
+
+                    await refreshConversations(currentConversationId);
+                    promptInput.value = '';
+                    safeSet(PROMPT_DRAFT_KEY, '');
+                } catch (error) {
+                    diagLog('error', 'submit fetch error', error);
+                    removeTransientMessage(pendingAssistantId);
+                    if (error.name === 'AbortError') {
+                        showError('Prompt cancelled.');
+                    } else {
+                        showError(error.message || 'Unable to reach the CFIR API.');
+                    }
+                } finally {
+                    showLoading(false, 'query');
+                    if (activeController === controller) {
+                        activeController = null;
+                    }
+                    activeOperation = null;
+                }
             } catch (error) {
-                removeTransientMessage(pendingAssistantId);
-                if (error.name === 'AbortError') {
-                    showError('Prompt cancelled.');
-                } else {
-                    showError(error.message || 'Unable to reach the CFIR API.');
-                }
-            } finally {
+                diagLog('error', 'Submit handler error:', error);
+                showError('An unexpected error occurred. Please try again.');
                 showLoading(false, 'query');
-                if (activeController === controller) {
-                    activeController = null;
-                }
                 activeOperation = null;
+                activeController = null;
             }
         });
     }
@@ -213,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
             appendMessageToFeed({ role: 'user', content: userTemplateMessage, timestamp: new Date().toISOString() });
             const pendingTemplateId = appendTypingMessage('AI is filling the template...');
             try {
-                const response = await fetchWithStartupRetry(() => {
+                const response = await fetchWithStartupRetry((requestSignal) => {
                     const formData = new FormData();
                     formData.append('file', file);
                     formData.append('prompt', prompt);
@@ -223,6 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     return fetch(`${API_BASE}/fill-template`, {
                         method: 'POST',
                         body: formData,
+                        signal: requestSignal,
                     });
                 });
 
@@ -261,16 +365,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function refreshConversations(preferredId = null) {
+        diagLog('log', 'refreshConversations start', {
+            preferredId,
+            currentConversationId,
+            existingConversationCount: Array.isArray(conversations) ? conversations.length : 0,
+        });
+
         try {
             const response = await fetch(`${API_BASE}/conversations`, {
                 method: 'GET',
                 cache: 'no-store',
             });
             if (!response.ok) {
-                throw new Error(`Unable to load conversations (${response.status})`);
+                diagLog('warn', 'refreshConversations fetch failed', { status: response.status });
+                showError(`Unable to load conversations (${response.status})`);
+                return;
             }
 
-            conversations = await response.json();
+            const fetchedConversations = await response.json();
+            if (!Array.isArray(fetchedConversations)) {
+                diagLog('warn', 'refreshConversations received non-array payload');
+                return;
+            }
+
+            conversations = fetchedConversations;
             const restoredId = readPersistedActiveConversation();
             const targetId = preferredId ?? currentConversationId ?? restoredId;
             const hasTarget = conversations.some((conv) => conv.id === targetId);
@@ -288,10 +406,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (currentConversationId !== null) {
                 await loadConversationMessages(currentConversationId);
-            } else {
-                renderMessages([]);
+            } else if (conversations.length === 0) {
+                renderMessages([], { allowClear: true, reason: 'no-conversations' });
             }
+            diagLog('log', 'refreshConversations done', {
+                currentConversationId,
+                conversationCount: conversations.length,
+            });
         } catch (error) {
+            diagLog('error', 'refreshConversations error', error);
             showError(error.message || 'Failed to load conversation history.');
         }
     }
@@ -307,7 +430,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const messages = await response.json();
-        renderMessages(messages);
+        diagLog('log', 'loadConversationMessages success', {
+            conversationId,
+            messageCount: Array.isArray(messages) ? messages.length : -1,
+        });
+        renderMessages(messages, { conversationId, allowClear: true, reason: 'load-conversation' });
     }
 
     async function removeConversation(conversationId) {
@@ -409,20 +536,46 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    function renderMessages(messages) {
+    function renderMessages(messages, options = {}) {
         if (!resultContainer) {
+            return;
+        }
+
+        const {
+            allowClear = false,
+            conversationId = currentConversationId,
+            reason = 'unspecified',
+        } = options;
+
+        if (!Array.isArray(messages)) {
+            diagLog('warn', 'renderMessages skipped: payload is not an array', { reason, conversationId });
+            return;
+        }
+
+        if (messages.length === 0 && currentConversationId !== null && !allowClear) {
+            diagLog('warn', 'renderMessages skipped empty clear to preserve current conversation', {
+                currentConversationId,
+                attemptedConversationId: conversationId,
+                reason,
+            });
             return;
         }
 
         resultContainer.innerHTML = '';
 
-        if (!Array.isArray(messages) || messages.length === 0) {
+        if (messages.length === 0) {
             updateFeedPlaceholder();
             return;
         }
 
         messages.forEach((message) => {
             appendMessageToFeed(message);
+        });
+
+        diagLog('log', 'renderMessages complete', {
+            conversationId,
+            messageCount: messages.length,
+            reason,
         });
 
         resultContainer.scrollTop = resultContainer.scrollHeight;
@@ -526,8 +679,82 @@ document.addEventListener('DOMContentLoaded', () => {
         if (loadingIndicator) {
             loadingIndicator.classList.toggle('hidden', !isLoading);
         }
+        if (isLoading) {
+            startLoadingProgress(operation);
+        } else {
+            stopLoadingProgress();
+        }
         toggleSubmitState(isLoading, operation);
         updateFeedPlaceholder();
+    }
+
+    function startLoadingProgress(operation) {
+        loadingStartedAtMs = Date.now();
+
+        if (loadingProgressTrack) {
+            loadingProgressTrack.classList.remove('hidden');
+        }
+
+        if (loadingElapsedText) {
+            loadingElapsedText.classList.remove('hidden');
+        }
+
+        if (loadingElapsedText) {
+            const opLabel = operation === 'template' ? 'template fill' : 'response generation';
+            loadingElapsedText.textContent = `Waiting for ${opLabel}: 0s`;
+        }
+
+        if (loadingProgressFill) {
+            loadingProgressFill.style.width = '6%';
+        }
+
+        if (loadingElapsedInterval) {
+            window.clearInterval(loadingElapsedInterval);
+        }
+
+        loadingElapsedInterval = window.setInterval(() => {
+            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - loadingStartedAtMs) / 1000));
+            if (loadingElapsedText) {
+                const opLabel = operation === 'template' ? 'template fill' : 'response generation';
+                loadingElapsedText.textContent = `Waiting for ${opLabel}: ${elapsedSeconds}s`;
+            }
+
+            if (loadingProgressFill) {
+                const percent = Math.min(95, 6 + (elapsedSeconds * 4));
+                loadingProgressFill.style.width = `${percent}%`;
+            }
+        }, 1000);
+    }
+
+    function stopLoadingProgress() {
+        if (loadingElapsedInterval) {
+            window.clearInterval(loadingElapsedInterval);
+            loadingElapsedInterval = null;
+        }
+
+        if (loadingProgressFill) {
+            loadingProgressFill.style.width = '100%';
+        }
+
+        if (loadingProgressTrack) {
+            window.setTimeout(() => {
+                if (!isProcessing && loadingProgressTrack) {
+                    loadingProgressTrack.classList.add('hidden');
+                    if (loadingProgressFill) {
+                        loadingProgressFill.style.width = '0%';
+                    }
+                }
+            }, 200);
+        }
+
+        if (loadingElapsedText) {
+            loadingElapsedText.textContent = 'Request completed.';
+            window.setTimeout(() => {
+                if (!isProcessing && loadingElapsedText) {
+                    loadingElapsedText.classList.add('hidden');
+                }
+            }, 600);
+        }
     }
 
     function toggleSubmitState(isLoading, operation) {
@@ -561,12 +788,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function pollBackendHealth() {
+        logInit('pollBackendHealth start');
+        if (window._backendHealthy || backendReady) {
+            window._backendHealthy = true;
+            backendReady = true;
+            if (backendStatus) {
+                backendStatus.classList.add('hidden');
+            }
+            diagLog('warn', 'pollBackendHealth skipped because backendReady=true');
+            return true;
+        }
+
         const maxAttempts = 15;
         const intervalMs = 2000;
 
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
-                setBackendReady(false, `Connecting to backend... (${attempt}/${maxAttempts})`);
+                if (!window._backendHealthy && backendStatus) {
+                    backendStatus.textContent = `Checking backend availability... (${attempt}/${maxAttempts})`;
+                }
                 const response = await fetch(`${API_BASE}/health`, {
                     method: 'GET',
                     cache: 'no-store',
@@ -574,13 +814,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (response.ok) {
                     const payload = await response.json();
                     if (payload && payload.status === 'healthy' && payload.ready === true) {
+                        window._backendHealthy = true;
                         setBackendReady(true, `Backend connected (v${payload.version || 'unknown'}).`);
+                        if (backendStatus) {
+                            backendStatus.classList.add('hidden');
+                        }
                         return true;
-                    }
-
-                    if (payload && payload.status === 'starting') {
-                        const startupError = payload.startup_error ? ` Warmup issue: ${payload.startup_error}` : '';
-                        setBackendReady(false, `Backend online, finishing warmup...${startupError}`);
                     }
                 }
             } catch (_) {
@@ -592,16 +831,28 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        setBackendReady(false, 'Backend unavailable. Start the API server and refresh this page.');
+        if (backendStatus) {
+            backendStatus.textContent = 'Backend unavailable. Start the API server and refresh this page.';
+            backendStatus.classList.remove('hidden');
+        }
         showError('Backend health check failed after multiple attempts.');
         return false;
     }
 
     function setBackendReady(isReady, message) {
+        if (!isReady && window._backendHealthy) {
+            diagLog('warn', 'Ignored attempt to mark backend unready after healthy lock', { message });
+            return;
+        }
+
         backendReady = isReady;
+        if (isReady) {
+            window._backendHealthy = true;
+        }
+
         if (backendStatus) {
             backendStatus.textContent = message;
-            backendStatus.classList.toggle('hidden', isReady);
+            backendStatus.classList.toggle('hidden', Boolean(window._backendHealthy || isReady));
             backendStatus.classList.remove('border-amber-200', 'bg-amber-50', 'text-amber-700', 'dark:border-amber-400/30', 'dark:bg-amber-400/10', 'dark:text-amber-200');
             backendStatus.classList.remove('border-emerald-200', 'bg-emerald-50', 'text-emerald-700', 'dark:border-emerald-400/30', 'dark:bg-emerald-400/10', 'dark:text-emerald-200');
             backendStatus.classList.add(
@@ -656,7 +907,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             try {
-                const response = await requestFactory();
+                const response = await fetchWithTimeout(requestFactory, QUERY_TIMEOUT_MS, signal);
                 if (response.ok) {
                     return response;
                 }
@@ -685,6 +936,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const fallbackMessage = 'Backend is still starting. Your draft is preserved - try again in a few seconds.';
         throw new Error(lastError?.message || fallbackMessage);
+    }
+
+    async function fetchWithTimeout(requestFactory, timeoutMs, outerSignal) {
+        const timeoutController = new AbortController();
+        let timeoutHandle = null;
+
+        const relayAbort = () => timeoutController.abort();
+        if (outerSignal) {
+            outerSignal.addEventListener('abort', relayAbort, { once: true });
+        }
+
+        timeoutHandle = window.setTimeout(() => {
+            timeoutController.abort();
+        }, Math.max(1000, Number(timeoutMs) || QUERY_TIMEOUT_MS));
+
+        try {
+            return await requestFactory(timeoutController.signal);
+        } catch (error) {
+            if (error?.name === 'AbortError' && !outerSignal?.aborted) {
+                throw new Error('Request timed out while waiting for model inference.');
+            }
+            throw error;
+        } finally {
+            if (timeoutHandle) {
+                window.clearTimeout(timeoutHandle);
+            }
+            if (outerSignal) {
+                outerSignal.removeEventListener('abort', relayAbort);
+            }
+        }
     }
 
     async function detectBackendStatusHint() {
@@ -747,6 +1028,33 @@ document.addEventListener('DOMContentLoaded', () => {
             loadingIndicator.className = 'hidden mt-2 text-sm text-slate-500 dark:text-slate-300';
             loadingIndicator.textContent = 'Processing request...';
             promptForm.prepend(loadingIndicator);
+        }
+
+        if (!loadingProgressTrack) {
+            loadingProgressTrack = document.createElement('div');
+            loadingProgressTrack.id = 'loading-progress-track';
+            loadingProgressTrack.className = 'hidden mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-700/70';
+
+            loadingProgressFill = document.createElement('div');
+            loadingProgressFill.id = 'loading-progress-fill';
+            loadingProgressFill.className = 'h-full rounded-full bg-emerald-500 transition-all duration-500 ease-linear';
+            loadingProgressFill.style.width = '0%';
+
+            loadingProgressTrack.appendChild(loadingProgressFill);
+            promptForm.prepend(loadingProgressTrack);
+        }
+
+        if (!loadingElapsedText) {
+            loadingElapsedText = document.createElement('p');
+            loadingElapsedText.id = 'loading-elapsed';
+            loadingElapsedText.className = 'hidden mt-1 text-xs text-slate-500 dark:text-slate-300';
+            loadingElapsedText.textContent = '';
+            promptForm.prepend(loadingElapsedText);
+        }
+
+        if (loadingIndicator) {
+            const isHidden = loadingIndicator.classList.contains('hidden');
+            loadingElapsedText.classList.toggle('hidden', isHidden);
         }
 
         if (!errorContainer) {

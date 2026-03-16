@@ -15,6 +15,8 @@ backend/conversations.db
 data/
 uploads/
 file_dump/
+generated_files/
+runtime/
 
 # Environment variables
 .env

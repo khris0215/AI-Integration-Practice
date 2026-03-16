@@ -125,7 +125,7 @@
                             </div>
                         </div>
 
-                        <form id="prompt-form" action="#" method="post" class="prompt-dock">
+                        <form id="prompt-form" class="prompt-dock" novalidate>
                             <div id="backend-status" class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200" role="status" aria-live="polite">
                                 Checking backend status...
                             </div>
@@ -147,7 +147,7 @@
 
                             <div class="prompt-field">
                                 <label for="prompt-input" class="sr-only">Prompt</label>
-                                <textarea id="prompt-input" rows="3" placeholder="Summarize case CFIR-2403 with emphasis on call logs and disputed charges." class="prompt-input"></textarea>
+                                <textarea id="prompt-input" rows="3" placeholder="Send a prompt" class="prompt-input"></textarea>
                                 <button type="submit" id="submit-button" class="prompt-send-button inline-flex items-center justify-center gap-2 rounded-full bg-brand-foam text-white dark:text-brand-ink font-semibold" data-state="idle">
                                     <span data-role="label">Send prompt</span>
                                     <svg data-role="spinner" class="hidden h-5 w-5 animate-spin text-white" viewBox="0 0 24 24" aria-hidden="true">

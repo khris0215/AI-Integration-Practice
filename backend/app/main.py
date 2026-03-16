@@ -17,6 +17,7 @@ app = FastAPI(title="CFIR Generator API")
 logger = logging.getLogger(__name__)
 app.state.ready = False
 app.state.startup_error = ""
+app.state.last_logged_health_ready = None
 GENERATED_ATTACHMENTS_DIR = Path(__file__).resolve().parent.parent / "generated_files"
 GENERATED_ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -122,7 +123,7 @@ async def warm_up_services() -> None:
 
 @app.post("/api/query", response_model=QueryResponse)
 async def query(request: QueryRequest) -> QueryResponse:
-    start_time = time.time()
+    request_start = time.time()
     if not app.state.ready:
         raise HTTPException(status_code=503, detail="Backend warmup in progress. Please retry shortly.")
     try:
@@ -136,6 +137,7 @@ async def query(request: QueryRequest) -> QueryResponse:
 
         database.add_message(conv_id, "user", request.prompt)
 
+        retrieval_start = time.time()
         use_incident_rag = retrieval.should_use_incident_rag(request.prompt)
         if use_incident_rag:
             chunks_with_scores = retrieval.retrieve_relevant_chunks(request.prompt, k=10)
@@ -145,7 +147,15 @@ async def query(request: QueryRequest) -> QueryResponse:
             context = "No incident retrieval context required for this prompt."
             sources = []
             incident_candidates = 0
+        logger.info(
+            "query[%s] retrieval took %.2fs (rag=%s, chunks=%s)",
+            conv_id,
+            time.time() - retrieval_start,
+            use_incident_rag,
+            len(chunks_with_scores),
+        )
 
+        history_start = time.time()
         history = database.get_messages(conv_id, limit=20)
         conversation_history = ""
         for msg in history:
@@ -157,7 +167,9 @@ async def query(request: QueryRequest) -> QueryResponse:
                 f"System: Retrieved {incident_candidates} possible incident sources from RAG. "
                 "If ambiguity remains, ask the user for date or incident ID.\n\n"
             )
+        logger.info("query[%s] history build took %.2fs", conv_id, time.time() - history_start)
 
+        generation_start = time.time()
         answer = generation.chat_response(
             conversation_history=conversation_history,
             context=context,
@@ -167,12 +179,14 @@ async def query(request: QueryRequest) -> QueryResponse:
             temperature=request.temperature,
             max_tokens=request.max_tokens,
         )
+        logger.info("query[%s] generation took %.2fs", conv_id, time.time() - generation_start)
 
         database.add_message(conv_id, "assistant", answer)
 
         conversation_meta = database.get_conversation(conv_id) or {}
         existing_title = str(conversation_meta.get("title", "")).strip()
         if not existing_title:
+            title_start = time.time()
             latest_history = database.get_messages(conv_id, limit=16)
             title_history = ""
             for msg in latest_history:
@@ -187,8 +201,10 @@ async def query(request: QueryRequest) -> QueryResponse:
                 fallback = request.prompt.strip().splitlines()[0][:80]
                 generated_title = fallback or "Fraud Incident Conversation"
             database.update_conversation_title(conv_id, generated_title)
+            logger.info("query[%s] title generation took %.2fs", conv_id, time.time() - title_start)
 
-        processing_time = int((time.time() - start_time) * 1000)
+        processing_time = int((time.time() - request_start) * 1000)
+        logger.info("query[%s] total processing took %.2fs", conv_id, time.time() - request_start)
         return QueryResponse(
             answer=answer,
             sources=sources,
@@ -239,9 +255,22 @@ async def get_messages(conv_id: int) -> list:
 @app.get("/api/health")
 async def health() -> dict:
     status = "healthy" if app.state.ready else "starting"
+    ready = bool(app.state.ready)
+    if app.state.last_logged_health_ready is None:
+        logger.info("health initialized: ready=%s status=%s", ready, status)
+        app.state.last_logged_health_ready = ready
+    elif app.state.last_logged_health_ready != ready:
+        logger.warning(
+            "health readiness changed: ready=%s status=%s startup_error=%s",
+            ready,
+            status,
+            app.state.startup_error,
+        )
+        app.state.last_logged_health_ready = ready
+
     return {
         "status": status,
-        "ready": bool(app.state.ready),
+        "ready": ready,
         "version": "1.0.0",
         "startup_error": app.state.startup_error,
     }
