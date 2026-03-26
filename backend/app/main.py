@@ -256,6 +256,8 @@ app.add_middleware(
         "http://127.0.0.1:8000",
         "null",  # file:// origin during local testing
     ],
+    # Allow private-LAN origins (phone -> laptop via Live Server) during local development.
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2})(?::\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
