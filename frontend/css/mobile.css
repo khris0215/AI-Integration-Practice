@@ -321,7 +321,7 @@ body > .relative.z-10.h-screen.flex.overflow-hidden {
   padding-right: 0.1rem;
   padding-bottom: 0.5rem;
   gap: 0.7rem;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: auto;
 }
 
 .chat-message {

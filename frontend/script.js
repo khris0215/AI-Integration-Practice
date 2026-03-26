@@ -1,4 +1,5 @@
-const API_BASE = 'http://localhost:8000/api';
+const API_BASE = 'http://192.168.68.51:8000/api'; //use http://localhost:8000/api for local development
+                                                //then use laptop's ip address for testing on mobile, ensure CORS is properly configured on the backend
 const PROMPT_DRAFT_KEY = 'landing-prompt-draft';
 const ERROR_CACHE_KEY = 'landing-error-message';
 const TEMPLATE_FILENAME_KEY = 'landing-template-filename';
