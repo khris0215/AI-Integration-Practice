@@ -1,12 +1,10 @@
 from pathlib import Path
 import logging
 import re
-import shutil
 import importlib
 import threading
 import time
 import gc
-import tempfile
 from langchain_core.documents import Document
 
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader
@@ -29,9 +27,11 @@ EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 logger = logging.getLogger(__name__)
 _EMBEDDINGS = None
 _VECTOR_STORE = None
+_VECTOR_STORE_OP_LOCK = threading.RLock()
 _RETRIEVAL_CACHE = {}
 _RETRIEVAL_CACHE_LOCK = threading.Lock()
 _RETRIEVAL_CACHE_TTL_SECONDS = 90
+VECTOR_COLLECTION_NAME = "incident_docs"
 
 MONTHS = {
     "january", "february", "march", "april", "may", "june",
@@ -99,15 +99,40 @@ def warm_up_retrieval() -> None:
     if hasattr(store, "_collection"):
         _ = store._collection.count()
 
+
+def _clear_active_collection(embeddings) -> None:
+    """Clear active collection when no source files remain."""
+    try:
+        existing = Chroma(
+            persist_directory=CHROMA_PATH,
+            embedding_function=embeddings,
+            collection_name=VECTOR_COLLECTION_NAME,
+        )
+        existing.delete_collection()
+    except Exception:
+        # Ignore if collection does not exist or backend rejects deletion.
+        pass
+
 def create_vector_store():
     global _VECTOR_STORE
     loader = DirectoryLoader(str(DATA_PATH), glob="**/*", loader_cls=UnstructuredFileLoader, show_progress=True)
     docs = loader.load()
+    embeddings = get_embeddings()
+
     if not docs:
-        logger.warning("create_vector_store found no files under DATA_PATH=%s; skipping rebuild", DATA_PATH)
+        logger.warning("create_vector_store found no files under DATA_PATH=%s; clearing active collection", DATA_PATH)
+        with _VECTOR_STORE_OP_LOCK:
+            _VECTOR_STORE = None
+            gc.collect()
+            _clear_active_collection(embeddings)
+            _VECTOR_STORE = Chroma(
+                persist_directory=CHROMA_PATH,
+                embedding_function=embeddings,
+                collection_name=VECTOR_COLLECTION_NAME,
+            )
         with _RETRIEVAL_CACHE_LOCK:
             _RETRIEVAL_CACHE.clear()
-        return None
+        return _VECTOR_STORE
 
     # Larger chunks reduce the chance an incident narrative is split across vectors.
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
@@ -124,84 +149,38 @@ def create_vector_store():
             filename = Path(source_path).name
             chunk.page_content = f"[Filename: {filename}]\n{chunk.page_content}"
 
-    chroma_dir = Path(CHROMA_PATH)
-    staging_dir = Path(tempfile.mkdtemp(prefix="chroma_db_staging_"))
+    with _VECTOR_STORE_OP_LOCK:
+        # Release active handles before rebuilding collection in place.
+        _VECTOR_STORE = None
+        gc.collect()
+        _clear_active_collection(embeddings)
+        try:
+            _VECTOR_STORE = Chroma.from_documents(
+                chunks,
+                embeddings,
+                persist_directory=CHROMA_PATH,
+                collection_name=VECTOR_COLLECTION_NAME,
+                collection_metadata={
+                    "hnsw:space": "cosine",
+                    "hnsw:M": 32,
+                    "hnsw:ef_construction": 200,
+                },
+            )
+        except Exception as exc:
+            if "hnsw" not in str(exc).lower():
+                raise
+            logger.warning("create_vector_store retrying without collection metadata due to error: %s", exc)
+            _VECTOR_STORE = Chroma.from_documents(
+                chunks,
+                embeddings,
+                persist_directory=CHROMA_PATH,
+                collection_name=VECTOR_COLLECTION_NAME,
+            )
 
-    embeddings = get_embeddings()
-    try:
-        vectorstore = Chroma.from_documents(
-            chunks,
-            embeddings,
-            persist_directory=str(staging_dir),
-            collection_metadata={
-                "hnsw:space": "cosine",
-                "hnsw:M": 32,
-                "hnsw:ef_construction": 200,
-            },
-        )
-    except Exception as exc:
-        # Some Chroma versions reject legacy/custom hnsw metadata layouts.
-        if "hnsw" not in str(exc).lower():
-            raise
-        logger.warning("create_vector_store retrying without collection metadata due to error: %s", exc)
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
-        vectorstore = Chroma.from_documents(
-            chunks,
-            embeddings,
-            persist_directory=str(staging_dir),
-        )
-
-    # Chroma >=0.4 persists automatically; avoid deprecated manual persist().
-
-    # Release staging handles before trying to move files on Windows.
-    vectorstore = None
-    gc.collect()
-
-    # Release active store handles before swap so Windows can move locked segment files.
-    _VECTOR_STORE = None
-    gc.collect()
-
-    # Swap in the newly built index only after a successful build so a transient
-    # empty DATA_PATH cannot wipe the currently valid index.
-    promoted = False
-    previous_root = None
-    previous_target = None
-
-    try:
-        if chroma_dir.exists():
-            previous_root = Path(tempfile.mkdtemp(prefix="chroma_db_previous_"))
-            previous_target = previous_root / chroma_dir.name
-            shutil.move(str(chroma_dir), str(previous_target))
-        shutil.move(str(staging_dir), str(chroma_dir))
-        promoted = True
-    except (PermissionError, OSError) as exc:
-        logger.warning(
-            "create_vector_store could not promote staged index due to file lock; keeping existing index. error=%s",
-            exc,
-        )
-        if previous_target is not None and previous_target.exists() and not chroma_dir.exists():
-            try:
-                shutil.move(str(previous_target), str(chroma_dir))
-            except Exception as restore_exc:
-                logger.warning("create_vector_store failed to restore previous index after promotion error: %s", restore_exc)
-    finally:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
-        if previous_root is not None and previous_root.exists():
-            shutil.rmtree(previous_root, ignore_errors=True)
-
-    if not promoted:
-        _VECTOR_STORE = get_vector_store()
         with _RETRIEVAL_CACHE_LOCK:
             _RETRIEVAL_CACHE.clear()
+        print(f"Stored {len(chunks)} chunks.")
         return _VECTOR_STORE
-
-    _VECTOR_STORE = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
-    with _RETRIEVAL_CACHE_LOCK:
-        _RETRIEVAL_CACHE.clear()
-    print(f"Stored {len(chunks)} chunks.")
-    return _VECTOR_STORE
 
 def get_vector_store():
     global _VECTOR_STORE
@@ -212,7 +191,11 @@ def get_vector_store():
             return None
         embeddings = get_embeddings()
         try:
-            _VECTOR_STORE = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+            _VECTOR_STORE = Chroma(
+                persist_directory=CHROMA_PATH,
+                embedding_function=embeddings,
+                collection_name=VECTOR_COLLECTION_NAME,
+            )
         except Exception as exc:
             logger.warning("get_vector_store failed to open persisted index: %s", exc)
             return None
@@ -243,7 +226,15 @@ def _fraud_keywords(query: str) -> set:
 def _extract_person_tokens(query: str) -> set:
     text = (query or "").lower()
     candidates = []
-    for marker in ("about", "regarding", "for", "on", "with"):
+    for marker in (
+        "about",
+        "regarding",
+        "concerning",
+        "involving",
+        "for",
+        "on",
+        "with",
+    ):
         match = re.search(rf"\b{marker}\s+([a-z]{{3,}})\s+([a-z]{{3,}})\b", text)
         if match:
             candidates.append(match.group(1))
@@ -383,15 +374,21 @@ def _build_file_scan_candidates(query: str, k: int) -> list:
     constraints = _extract_constraints(query)
     q_tokens = _query_tokens(query)
     candidates = []
+    supported_suffixes = {".txt", ".pdf", ".docx"}
 
     for file_path in DATA_PATH.glob("*"):
-        if not file_path.is_file() or file_path.suffix.lower() not in {".txt"}:
+        suffix = file_path.suffix.lower()
+        if not file_path.is_file() or suffix not in supported_suffixes:
             continue
 
-        try:
-            text = file_path.read_text(encoding="utf-8", errors="ignore")
-        except Exception:
-            continue
+        filename_tokens = re.sub(r"[^a-z0-9]+", " ", file_path.stem.lower()).strip()
+        text = f"filename {file_path.name.lower()} {filename_tokens}"
+        if suffix == ".txt":
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception:
+                # Keep filename-based fallback even if text read fails.
+                pass
 
         text_lower = text.lower()
         temporal_ok = _doc_matches_temporal(text_lower, constraints)
@@ -581,7 +578,8 @@ def retrieve_relevant_chunks(query, k=10):
         logger.info("retrieve_relevant_chunks cache_hit query=%r k=%s", query, k)
         return cached
 
-    db = get_vector_store()
+    with _VECTOR_STORE_OP_LOCK:
+        db = get_vector_store()
     if db is None:
         logger.info("retrieve_relevant_chunks: no vector store available; returning no chunks")
         _set_cached_results(query, k, [])
@@ -591,7 +589,8 @@ def retrieve_relevant_chunks(query, k=10):
 
     # Pull many candidates so the reranker can find date/type matches reliably.
     candidate_count = max(k * 5, 24)
-    raw_results = db.similarity_search_with_score(query, k=candidate_count)
+    with _VECTOR_STORE_OP_LOCK:
+        raw_results = db.similarity_search_with_score(query, k=candidate_count)
     raw_results = [(doc, _normalize_semantic_score(distance)) for doc, distance in raw_results]
 
     # Remove stale vectors that point to non-existent source files.
@@ -602,11 +601,13 @@ def retrieve_relevant_chunks(query, k=10):
         if rebuilt is None:
             _set_cached_results(query, k, [])
             return []
-        db = get_vector_store()
+        with _VECTOR_STORE_OP_LOCK:
+            db = get_vector_store()
         if db is None:
             _set_cached_results(query, k, [])
             return []
-        raw_results = db.similarity_search_with_score(query, k=candidate_count)
+        with _VECTOR_STORE_OP_LOCK:
+            raw_results = db.similarity_search_with_score(query, k=candidate_count)
         raw_results = [(doc, _normalize_semantic_score(distance)) for doc, distance in raw_results]
         live_results = [(doc, score) for doc, score in raw_results if _is_live_source(doc)]
 
@@ -631,6 +632,11 @@ def retrieve_relevant_chunks(query, k=10):
     elif person_only_matches and constraints.get("person_tokens"):
         working_set = person_only_matches
     elif constraints.get("person_tokens"):
+        fallback = _build_file_scan_candidates(query, k)
+        if fallback:
+            logger.info("No person-constrained vector match; file-scan fallback returned %s chunks", len(fallback))
+            _set_cached_results(query, k, fallback)
+            return fallback
         logger.info("No person-constrained match found for query=%r; returning no chunks", query)
         _set_cached_results(query, k, [])
         return []

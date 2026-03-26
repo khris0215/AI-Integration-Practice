@@ -7,8 +7,8 @@ from pathlib import Path
 import requests
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 
-from app.retrieval import create_vector_store
 from app.paths import DATA_PATH
 
 logging.basicConfig(level=logging.INFO)
@@ -35,6 +35,9 @@ SUPPORTED_SUFFIXES = {
 
 INGEST_ENDPOINT = os.getenv("WATCHER_INGEST_ENDPOINT", "http://127.0.0.1:8000/api/ingest?mode=local")
 INGEST_STATUS_ENDPOINT = os.getenv("WATCHER_INGEST_STATUS_ENDPOINT", "http://127.0.0.1:8000/api/ingest/status")
+INGEST_CONNECT_TIMEOUT_SECONDS = float(os.getenv("WATCHER_INGEST_CONNECT_TIMEOUT_SECONDS", "3"))
+INGEST_READ_TIMEOUT_SECONDS = float(os.getenv("WATCHER_INGEST_READ_TIMEOUT_SECONDS", "75"))
+OBSERVER_MODE = str(os.getenv("WATCHER_OBSERVER_MODE") or "polling").strip().lower()
 
 
 class DebouncedHandler(FileSystemEventHandler):
@@ -105,8 +108,7 @@ class DebouncedHandler(FileSystemEventHandler):
             if self._trigger_backend_ingest():
                 logger.info("Backend ingestion accepted from watcher event.")
             else:
-                logger.warning("Backend ingestion unavailable; rebuilding index directly in watcher process.")
-                create_vector_store()
+                logger.warning("Backend ingestion unavailable; no local rebuild fallback will run.")
             logger.info("Index rebuild complete.")
         except Exception as exc:
             logger.exception("Index rebuild failed: %s", exc)
@@ -116,7 +118,10 @@ class DebouncedHandler(FileSystemEventHandler):
     def _trigger_backend_ingest(self) -> bool:
         """Ask the API process to rebuild index so Chroma file handles stay in one process."""
         try:
-            status_resp = requests.get(INGEST_STATUS_ENDPOINT, timeout=(3, 8))
+            status_resp = requests.get(
+                INGEST_STATUS_ENDPOINT,
+                timeout=(INGEST_CONNECT_TIMEOUT_SECONDS, 8),
+            )
             if status_resp.ok:
                 payload = status_resp.json() if status_resp.content else {}
                 if bool(payload.get("running")):
@@ -126,7 +131,15 @@ class DebouncedHandler(FileSystemEventHandler):
             # Status endpoint is best-effort; proceed to trigger.
             pass
 
-        resp = requests.post(INGEST_ENDPOINT, timeout=(3, 20))
+        try:
+            resp = requests.post(
+                INGEST_ENDPOINT,
+                timeout=(INGEST_CONNECT_TIMEOUT_SECONDS, INGEST_READ_TIMEOUT_SECONDS),
+            )
+        except requests.exceptions.RequestException as exc:
+            logger.warning("Watcher backend ingest trigger request failed: %s", exc)
+            return False
+
         if not resp.ok:
             logger.warning("Watcher backend ingest trigger failed status=%s body=%s", resp.status_code, resp.text[:200])
             return False
@@ -141,11 +154,19 @@ class DebouncedHandler(FileSystemEventHandler):
 
 if __name__ == "__main__":
     path = str(DATA_PATH)
+    if OBSERVER_MODE == "polling":
+        observer = PollingObserver()
+    else:
+        observer = Observer()
+
     event_handler = DebouncedHandler(delay=5.0)
-    observer = Observer()
     observer.schedule(event_handler, path, recursive=True)
     observer.start()
-    logger.info("Watching %s recursively for supported files with debounce.", path)
+    logger.info(
+        "Watching %s recursively for supported files with debounce. observer_mode=%s",
+        path,
+        OBSERVER_MODE,
+    )
     try:
         while True:
             time.sleep(1)
