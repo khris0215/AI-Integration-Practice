@@ -1559,7 +1559,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return 'Now';
         }
 
-        const parsed = new Date(timestamp);
+        const raw = String(timestamp).trim();
+        let normalized = raw;
+
+        // SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" in UTC.
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+            normalized = `${raw.replace(' ', 'T')}Z`;
+        } else if (
+            /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw)
+        ) {
+            // Naive ISO timestamps are treated as UTC to avoid timezone drift.
+            normalized = `${raw}Z`;
+        }
+
+        const parsed = new Date(normalized);
         if (Number.isNaN(parsed.getTime())) {
             return 'Now';
         }
