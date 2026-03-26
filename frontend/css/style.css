@@ -246,8 +246,19 @@ html {
   gap: 0.5rem;
 }
 
+#template-select {
+  width: min(100%, 11.5rem);
+  padding-right: 2rem;
+}
+
 .prompt-template-row input[type="file"] {
-  flex: 1 1 320px;
+  flex: 0 0 auto;
+  width: 9.75rem;
+  color: transparent;
+}
+
+.prompt-template-row input[type="file"]::file-selector-button {
+  margin-right: 0;
 }
 
 @media (prefers-color-scheme: dark) {
