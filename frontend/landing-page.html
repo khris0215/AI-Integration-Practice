@@ -6,7 +6,7 @@
     <title>Testing AI · Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/style.css">
     <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
     <script>
@@ -24,12 +24,93 @@
                         }
                     },
                     fontFamily: {
-                        display: ['Space Grotesk', 'sans-serif'],
+                        display: ['IBM Plex Sans', 'sans-serif'],
                         body: ['IBM Plex Sans', 'sans-serif']
                     }
                 }
             }
         }
+    </script>
+    <script>
+        // Prevent dev live-reload scripts from aborting in-flight chat requests.
+        (function blockAutoReload() {
+            try {
+                if (typeof window === 'undefined') {
+                    return;
+                }
+
+                const NativeWebSocket = window.WebSocket;
+                if (typeof NativeWebSocket === 'function') {
+                    window.WebSocket = function (...args) {
+                        const ws = new NativeWebSocket(...args);
+                        const url = String(args[0] || '');
+                        const isLiveReloadSocket = /\/ws(\?|$)/i.test(url) || /livereload/i.test(url);
+
+                        if (!isLiveReloadSocket) {
+                            return ws;
+                        }
+
+                        const nativeAdd = ws.addEventListener.bind(ws);
+                        ws.addEventListener = function (type, listener, options) {
+                            if (type !== 'message' || typeof listener !== 'function') {
+                                return nativeAdd(type, listener, options);
+                            }
+                            const wrapped = function (event) {
+                                const data = String(event?.data || '');
+                                if (data.includes('reload') || data.includes('refreshcss')) {
+                                    console.warn('[Landing] Blocked live-reload websocket message.', data);
+                                    return;
+                                }
+                                return listener.call(this, event);
+                            };
+                            return nativeAdd(type, wrapped, options);
+                        };
+
+                        let assignedOnMessage = null;
+                        Object.defineProperty(ws, 'onmessage', {
+                            configurable: true,
+                            enumerable: true,
+                            get() {
+                                return assignedOnMessage;
+                            },
+                            set(handler) {
+                                assignedOnMessage = handler;
+                                if (typeof handler !== 'function') {
+                                    return;
+                                }
+                                nativeAdd('message', function (event) {
+                                    const data = String(event?.data || '');
+                                    if (data.includes('reload') || data.includes('refreshcss')) {
+                                        console.warn('[Landing] Blocked live-reload onmessage event.', data);
+                                        return;
+                                    }
+                                    handler.call(ws, event);
+                                });
+                            },
+                        });
+
+                        return ws;
+                    };
+                    window.WebSocket.prototype = NativeWebSocket.prototype;
+                }
+
+                const originalReload = window.location?.reload?.bind(window.location);
+                if (typeof originalReload === 'function') {
+                    window.__manualPageReload = originalReload;
+                    window.location.reload = function (...reloadArgs) {
+                        const stack = new Error().stack || '';
+                        const likelyLiveReload = stack.includes('socket.onmessage') || stack.includes('livereload');
+                        if (likelyLiveReload) {
+                            console.warn('[Landing] Blocked auto reload from live-reload stack.', { reloadArgs });
+                            return;
+                        }
+                        return originalReload(...reloadArgs);
+                    };
+                }
+            } catch (error) {
+                console.warn('[Landing] Failed to install auto-reload guard:', error);
+            }
+        })();
     </script>
 </head>
 <body class="h-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
@@ -57,33 +138,16 @@
                     </span>
                     <span class="sidebar-label">Console</span>
                 </a>
-                <a href="pages/workflow.html" class="sidebar-link">
+                <a href="pages/templates.html" class="sidebar-link">
                     <span class="nav-icon" aria-hidden="true">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M6 12a6 6 0 0 1 10.39-4.25L18 6v5"></path>
-                            <path d="M18 12a6 6 0 0 1-10.39 4.25L6 18v-5"></path>
+                            <path d="M7 4h7l4 4v12H7z"></path>
+                            <path d="M14 4v4h4"></path>
+                            <path d="M10 12h6"></path>
+                            <path d="M10 16h6"></path>
                         </svg>
                     </span>
-                    <span class="sidebar-label">Workflow</span>
-                </a>
-                <a href="pages/security.html" class="sidebar-link">
-                    <span class="nav-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 3l7 3v5c0 5.25-3 8.58-7 10-4-1.42-7-4.75-7-10V6z"></path>
-                            <path d="M12 11v4"></path>
-                        </svg>
-                    </span>
-                    <span class="sidebar-label">Security</span>
-                </a>
-                <a href="pages/pricing.html" class="sidebar-link">
-                    <span class="nav-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="7"></circle>
-                            <path d="M12 8v8"></path>
-                            <path d="M9.5 9.5a3 3 0 0 1 5 0"></path>
-                        </svg>
-                    </span>
-                    <span class="sidebar-label">Pricing</span>
+                    <span class="sidebar-label">Templates</span>
                 </a>
             </nav>
             <div class="sidebar-divider" aria-hidden="true"></div>
@@ -129,20 +193,18 @@
                             <div id="backend-status" class="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200" role="status" aria-live="polite">
                                 Checking backend status...
                             </div>
-                            <div class="prompt-template-row">                   
+                            <div class="prompt-template-row">
+                                <label for="template-select" class="sr-only">Choose template</label>
+                                <select id="template-select" class="rounded-full border border-slate-300 bg-white/95 px-3 py-2 text-sm text-slate-700 dark:border-white/20 dark:bg-white/10 dark:text-slate-100">
+                                    <option value="">No template selected (Q&A mode)</option>
+                                </select>
                                 <input
                                     type="file"
                                     id="template-file"
                                     accept=".txt,.docx"
                                     class="text-sm file:mr-3 file:rounded-full file:border-0 file:bg-slate-200 file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-slate-700 dark:file:bg-white/15 dark:file:text-slate-100"
+                                    title="Optional: upload a template file for this prompt"
                                 >
-                                <button
-                                    type="button"
-                                    id="fill-template-btn"
-                                    class="inline-flex items-center justify-center rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-                                >
-                                    Fill Template
-                                </button>
                             </div>
 
                             <div class="prompt-field">

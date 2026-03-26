@@ -1,4 +1,5 @@
 import sqlite3
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -7,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_DIR = PROJECT_ROOT / "runtime"
 RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = RUNTIME_DIR / "conversations.db"
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -24,6 +26,7 @@ def get_db():
 
 
 def init_db() -> None:
+    logger.debug("db.init_db start path=%s", DB_PATH)
     with get_db() as conn:
         conn.executescript(
             """
@@ -65,16 +68,21 @@ def init_db() -> None:
             ON attachments(conversation_id);
             """
         )
+    logger.debug("db.init_db done")
 
 
 def create_conversation(title: str = "") -> int:
+    logger.debug("db.create_conversation title_len=%s", len(title or ""))
     with get_db() as conn:
         cur = conn.execute("INSERT INTO conversations (title) VALUES (?)", (title,))
         conn.commit()
-        return int(cur.lastrowid)
+        conv_id = int(cur.lastrowid)
+        logger.debug("db.create_conversation created id=%s", conv_id)
+        return conv_id
 
 
 def get_conversations(limit: int = 50) -> List[Dict]:
+    logger.debug("db.get_conversations limit=%s", limit)
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -96,10 +104,13 @@ def get_conversations(limit: int = 50) -> List[Dict]:
             """,
             (limit,),
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        logger.debug("db.get_conversations returned count=%s", len(rows))
+        return rows
 
 
 def get_conversation(conv_id: int) -> Optional[Dict]:
+    logger.debug("db.get_conversation conv_id=%s", conv_id)
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -110,14 +121,19 @@ def get_conversation(conv_id: int) -> Optional[Dict]:
             (conv_id,),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        result = dict(row) if row else None
+        logger.debug("db.get_conversation conv_id=%s found=%s", conv_id, bool(result))
+        return result
 
 
 def delete_conversation(conv_id: int) -> bool:
+    logger.debug("db.delete_conversation conv_id=%s", conv_id)
     with get_db() as conn:
         cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
         conn.commit()
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        logger.debug("db.delete_conversation conv_id=%s deleted=%s", conv_id, deleted)
+        return deleted
 
 
 def update_conversation_title(conv_id: int, title: str) -> bool:
@@ -131,10 +147,13 @@ def update_conversation_title(conv_id: int, title: str) -> bool:
             (normalized[:120], conv_id),
         )
         conn.commit()
-        return cur.rowcount > 0
+        updated = cur.rowcount > 0
+        logger.debug("db.update_conversation_title conv_id=%s updated=%s", conv_id, updated)
+        return updated
 
 
 def add_message(conv_id: int, role: str, content: str) -> int:
+    logger.debug("db.add_message conv_id=%s role=%s content_len=%s", conv_id, role, len(content or ""))
     with get_db() as conn:
         cur = conn.execute(
             "INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)",
@@ -145,7 +164,9 @@ def add_message(conv_id: int, role: str, content: str) -> int:
             (conv_id,),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        message_id = int(cur.lastrowid)
+        logger.debug("db.add_message created id=%s conv_id=%s", message_id, conv_id)
+        return message_id
 
 
 def add_attachment(
@@ -155,6 +176,13 @@ def add_attachment(
     storage_path: str,
     content_type: str,
 ) -> int:
+    logger.debug(
+        "db.add_attachment conv_id=%s message_id=%s filename=%s content_type=%s",
+        conv_id,
+        message_id,
+        filename,
+        content_type,
+    )
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -168,10 +196,13 @@ def add_attachment(
             (conv_id,),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        attachment_id = int(cur.lastrowid)
+        logger.debug("db.add_attachment created id=%s conv_id=%s", attachment_id, conv_id)
+        return attachment_id
 
 
 def get_attachment(attachment_id: int) -> Optional[Dict]:
+    logger.debug("db.get_attachment id=%s", attachment_id)
     with get_db() as conn:
         cur = conn.execute(
             """
@@ -182,13 +213,27 @@ def get_attachment(attachment_id: int) -> Optional[Dict]:
             (attachment_id,),
         )
         row = cur.fetchone()
-        return dict(row) if row else None
+        result = dict(row) if row else None
+        logger.debug("db.get_attachment id=%s found=%s", attachment_id, bool(result))
+        return result
 
 
 def get_messages(conv_id: int, limit: int = 50) -> List[Dict]:
+    logger.debug("db.get_messages conv_id=%s limit=%s", conv_id, limit)
     with get_db() as conn:
         cur = conn.execute(
             """
+            WITH latest_messages AS (
+                SELECT
+                    id,
+                    role,
+                    content,
+                    timestamp
+                FROM messages
+                WHERE conversation_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            )
             SELECT
                 m.id,
                 m.role,
@@ -196,12 +241,12 @@ def get_messages(conv_id: int, limit: int = 50) -> List[Dict]:
                 m.timestamp,
                 a.id AS attachment_id,
                 a.filename AS attachment_filename
-            FROM messages m
+            FROM latest_messages m
             LEFT JOIN attachments a ON a.message_id = m.id
-            WHERE m.conversation_id = ?
             ORDER BY m.id ASC
-            LIMIT ?
             """,
             (conv_id, limit),
         )
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        logger.debug("db.get_messages conv_id=%s returned count=%s", conv_id, len(rows))
+        return rows

@@ -2,6 +2,8 @@
 setlocal
 
 set "ROOT=%~dp0"
+if not defined START_WATCHER set "START_WATCHER=1"
+set "START_WATCHER=%START_WATCHER:\"=%"
 
 call :is_port_listening 8000
 if %errorlevel%==0 (
@@ -24,11 +26,14 @@ if %errorlevel%==0 (
 	start "Frontend" /D "%ROOT%frontend" cmd /k "python -m http.server 5500"
 )
 
-if /I "%START_WATCHER%"=="1" (
-	start "Watcher" /D "%ROOT%backend" cmd /k "call venv\Scripts\activate && python watcher.py"
-) else (
-	echo [INFO] Watcher disabled by default. Set START_WATCHER=1 to enable it.
-)
+if /I "%START_WATCHER%"=="1" goto :start_watcher
+echo [INFO] Watcher disabled. Set START_WATCHER=1 to enable it.
+goto :after_watcher
+
+:start_watcher
+start "Watcher" cmd /k ""%ROOT%backend\venv\Scripts\python.exe" "%ROOT%backend\watcher.py""
+
+:after_watcher
 
 goto :eof
 

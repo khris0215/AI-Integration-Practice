@@ -5,10 +5,13 @@ import shutil
 import importlib
 import threading
 import time
+import gc
+import tempfile
 from langchain_core.documents import Document
 
 from langchain_community.document_loaders import DirectoryLoader, UnstructuredFileLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from .paths import DATA_PATH
 
 try:
     HuggingFaceEmbeddings = importlib.import_module("langchain_huggingface").HuggingFaceEmbeddings
@@ -23,7 +26,6 @@ except Exception:  # pragma: no cover - compatibility fallback
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CHROMA_PATH = str(PROJECT_ROOT / "chroma_db")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-DATA_PATH = PROJECT_ROOT / "file_dump"
 logger = logging.getLogger(__name__)
 _EMBEDDINGS = None
 _VECTOR_STORE = None
@@ -73,6 +75,12 @@ FILE_RETRIEVAL_OBJECT_TERMS = {
     "file", "report", "incident", "case", "document", "doc", "record",
 }
 
+NON_PERSON_TOKENS = {
+    "about", "regarding", "involving", "involved", "that", "with", "from", "for", "this", "these", "the",
+    "incident", "report", "template", "information", "details", "show", "give", "query", "ransomware",
+    "malware", "fraud", "phishing", "case", "document", "file", "record", "latest", "newest",
+}.union(INCIDENT_INTENT_TERMS)
+
 def get_embeddings():
     global _EMBEDDINGS
     if _EMBEDDINGS is None:
@@ -93,44 +101,121 @@ def warm_up_retrieval() -> None:
 
 def create_vector_store():
     global _VECTOR_STORE
-    # Rebuild from scratch to prevent stale chunks from deleted/renamed files.
-    if Path(CHROMA_PATH).exists():
-        shutil.rmtree(CHROMA_PATH, ignore_errors=True)
-
     loader = DirectoryLoader(str(DATA_PATH), glob="**/*", loader_cls=UnstructuredFileLoader, show_progress=True)
     docs = loader.load()
+    if not docs:
+        logger.warning("create_vector_store found no files under DATA_PATH=%s; skipping rebuild", DATA_PATH)
+        with _RETRIEVAL_CACHE_LOCK:
+            _RETRIEVAL_CACHE.clear()
+        return None
+
     # Larger chunks reduce the chance an incident narrative is split across vectors.
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=200)
     chunks = text_splitter.split_documents(docs)
+    if not chunks:
+        logger.warning("create_vector_store produced zero chunks from DATA_PATH=%s; skipping rebuild", DATA_PATH)
+        with _RETRIEVAL_CACHE_LOCK:
+            _RETRIEVAL_CACHE.clear()
+        return None
+
     for chunk in chunks:
         source_path = chunk.metadata.get("source")
         if source_path:
             filename = Path(source_path).name
             chunk.page_content = f"[Filename: {filename}]\n{chunk.page_content}"
+
+    chroma_dir = Path(CHROMA_PATH)
+    staging_dir = Path(tempfile.mkdtemp(prefix="chroma_db_staging_"))
+
     embeddings = get_embeddings()
-    vectorstore = Chroma.from_documents(
-        chunks,
-        embeddings,
-        persist_directory=CHROMA_PATH,
-        collection_metadata={
-            "hnsw:space": "cosine",
-            "hnsw:M": 32,
-            "hnsw:ef_construction": 200,
-        },
-    )
-    if hasattr(vectorstore, "persist"):
-        vectorstore.persist()
-    _VECTOR_STORE = vectorstore
+    try:
+        vectorstore = Chroma.from_documents(
+            chunks,
+            embeddings,
+            persist_directory=str(staging_dir),
+            collection_metadata={
+                "hnsw:space": "cosine",
+                "hnsw:M": 32,
+                "hnsw:ef_construction": 200,
+            },
+        )
+    except Exception as exc:
+        # Some Chroma versions reject legacy/custom hnsw metadata layouts.
+        if "hnsw" not in str(exc).lower():
+            raise
+        logger.warning("create_vector_store retrying without collection metadata due to error: %s", exc)
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        vectorstore = Chroma.from_documents(
+            chunks,
+            embeddings,
+            persist_directory=str(staging_dir),
+        )
+
+    # Chroma >=0.4 persists automatically; avoid deprecated manual persist().
+
+    # Release staging handles before trying to move files on Windows.
+    vectorstore = None
+    gc.collect()
+
+    # Release active store handles before swap so Windows can move locked segment files.
+    _VECTOR_STORE = None
+    gc.collect()
+
+    # Swap in the newly built index only after a successful build so a transient
+    # empty DATA_PATH cannot wipe the currently valid index.
+    promoted = False
+    previous_root = None
+    previous_target = None
+
+    try:
+        if chroma_dir.exists():
+            previous_root = Path(tempfile.mkdtemp(prefix="chroma_db_previous_"))
+            previous_target = previous_root / chroma_dir.name
+            shutil.move(str(chroma_dir), str(previous_target))
+        shutil.move(str(staging_dir), str(chroma_dir))
+        promoted = True
+    except (PermissionError, OSError) as exc:
+        logger.warning(
+            "create_vector_store could not promote staged index due to file lock; keeping existing index. error=%s",
+            exc,
+        )
+        if previous_target is not None and previous_target.exists() and not chroma_dir.exists():
+            try:
+                shutil.move(str(previous_target), str(chroma_dir))
+            except Exception as restore_exc:
+                logger.warning("create_vector_store failed to restore previous index after promotion error: %s", restore_exc)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        if previous_root is not None and previous_root.exists():
+            shutil.rmtree(previous_root, ignore_errors=True)
+
+    if not promoted:
+        _VECTOR_STORE = get_vector_store()
+        with _RETRIEVAL_CACHE_LOCK:
+            _RETRIEVAL_CACHE.clear()
+        return _VECTOR_STORE
+
+    _VECTOR_STORE = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
     with _RETRIEVAL_CACHE_LOCK:
         _RETRIEVAL_CACHE.clear()
     print(f"Stored {len(chunks)} chunks.")
-    return vectorstore
+    return _VECTOR_STORE
 
 def get_vector_store():
     global _VECTOR_STORE
     if _VECTOR_STORE is None:
+        chroma_sqlite = Path(CHROMA_PATH) / "chroma.sqlite3"
+        if not chroma_sqlite.exists():
+            logger.warning("get_vector_store: no persisted index found at %s", CHROMA_PATH)
+            return None
         embeddings = get_embeddings()
-        _VECTOR_STORE = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+        try:
+            _VECTOR_STORE = Chroma(persist_directory=CHROMA_PATH, embedding_function=embeddings)
+        except Exception as exc:
+            logger.warning("get_vector_store failed to open persisted index: %s", exc)
+            return None
     return _VECTOR_STORE
 
 
@@ -155,15 +240,56 @@ def _fraud_keywords(query: str) -> set:
     return detected
 
 
+def _extract_person_tokens(query: str) -> set:
+    text = (query or "").lower()
+    candidates = []
+    for marker in ("about", "regarding", "for", "on", "with"):
+        match = re.search(rf"\b{marker}\s+([a-z]{{3,}})\s+([a-z]{{3,}})\b", text)
+        if match:
+            candidates.append(match.group(1))
+            candidates.append(match.group(2))
+
+    cleaned = []
+    for token in candidates:
+        if token in NON_PERSON_TOKENS:
+            continue
+        if token in MONTHS:
+            continue
+        cleaned.append(token)
+
+    return set(cleaned)
+
+
+def _extract_excluded_person_tokens(query: str) -> set:
+    text = (query or "").lower()
+    excluded = []
+    for match in re.finditer(r"\bnot\s+([a-z]{3,})\s+([a-z]{3,})\b", text):
+        excluded.append(match.group(1))
+        excluded.append(match.group(2))
+
+    cleaned = []
+    for token in excluded:
+        if token in NON_PERSON_TOKENS:
+            continue
+        if token in MONTHS:
+            continue
+        cleaned.append(token)
+    return set(cleaned)
+
+
 def _extract_constraints(query: str) -> dict:
     temporal = _temporal_tokens(query)
     years = {token for token in temporal if re.fullmatch(r"20\d{2}", token)}
     months = {token for token in temporal if token in MONTHS}
     fraud = _fraud_keywords(query)
+    person_tokens = _extract_person_tokens(query)
+    excluded_person_tokens = _extract_excluded_person_tokens(query)
     return {
         "years": years,
         "months": months,
         "fraud": fraud,
+        "person_tokens": person_tokens,
+        "excluded_person_tokens": excluded_person_tokens,
     }
 
 
@@ -219,7 +345,8 @@ def suggest_similar_incident_files(query: str, limit: int = 3) -> list[str]:
         lexical_ratio = lexical_hits / max(len(q_tokens), 1) if q_tokens else 0.0
         temporal_score = 1.0 if _doc_matches_temporal(text, constraints) else 0.0
         fraud_score = 1.0 if _doc_matches_fraud(text, constraints) else 0.0
-        score = (0.6 * lexical_ratio) + (0.25 * temporal_score) + (0.15 * fraud_score)
+        person_score = 1.0 if _doc_matches_person(text, constraints) else 0.0
+        score = (0.5 * lexical_ratio) + (0.2 * temporal_score) + (0.15 * fraud_score) + (0.35 * person_score)
         if score <= 0:
             continue
 
@@ -269,6 +396,7 @@ def _build_file_scan_candidates(query: str, k: int) -> list:
         text_lower = text.lower()
         temporal_ok = _doc_matches_temporal(text_lower, constraints)
         fraud_ok = _doc_matches_fraud(text_lower, constraints)
+        person_ok = _doc_matches_person(text_lower, constraints)
 
         if _has_temporal_constraint(constraints) and not temporal_ok:
             continue
@@ -276,11 +404,15 @@ def _build_file_scan_candidates(query: str, k: int) -> list:
         if constraints.get("fraud") and not fraud_ok:
             continue
 
+        if constraints.get("person_tokens") and not person_ok:
+            continue
+
         lexical_hits = sum(1 for token in q_tokens if token in text_lower)
         lexical_ratio = lexical_hits / max(len(q_tokens), 1) if q_tokens else 0.0
         temporal_bonus = 1.0 if temporal_ok and _has_temporal_constraint(constraints) else 0.0
         fraud_bonus = 0.5 if fraud_ok and constraints.get("fraud") else 0.0
-        score = lexical_ratio + temporal_bonus + fraud_bonus
+        person_bonus = 0.8 if person_ok and constraints.get("person_tokens") else 0.0
+        score = lexical_ratio + temporal_bonus + fraud_bonus + person_bonus
 
         doc = Document(page_content=f"[Filename: {file_path.name}]\n{text}", metadata={"source": str(file_path.resolve())})
         candidates.append((doc, float(score)))
@@ -344,12 +476,25 @@ def _doc_matches_fraud(text: str, constraints: dict) -> bool:
     return False
 
 
+def _doc_matches_person(text: str, constraints: dict) -> bool:
+    person_tokens = constraints.get("person_tokens", set())
+    excluded_person_tokens = constraints.get("excluded_person_tokens", set())
+
+    if excluded_person_tokens and all(token in text for token in excluded_person_tokens):
+        return False
+
+    if not person_tokens:
+        return True
+    return all(token in text for token in person_tokens)
+
+
 def _score_chunk(query: str, doc_text: str, base_score: float) -> float:
     text = (doc_text or "").lower()
     q_tokens = _query_tokens(query)
     constraints = _extract_constraints(query)
     t_tokens = constraints["years"].union(constraints["months"])
     fraud_terms = constraints["fraud"]
+    person_tokens = constraints.get("person_tokens", set())
 
     if not q_tokens:
         return float(base_score)
@@ -378,8 +523,11 @@ def _score_chunk(query: str, doc_text: str, base_score: float) -> float:
                 fraud_hits += 1
     fraud_ratio = fraud_hits / max(len(fraud_terms), 1) if fraud_terms else 0.0
 
+    person_hits = sum(1 for token in person_tokens if token in text)
+    person_ratio = person_hits / max(len(person_tokens), 1) if person_tokens else 0.0
+
     # Blend semantic score with exact-term matching, strongly preferring temporal matches.
-    return float(base_score) + (0.20 * lexical_ratio) + (0.55 * temporal_ratio) + (0.25 * fraud_ratio)
+    return float(base_score) + (0.15 * lexical_ratio) + (0.45 * temporal_ratio) + (0.20 * fraud_ratio) + (0.40 * person_ratio)
 
 
 def _normalize_semantic_score(raw_distance: float) -> float:
@@ -434,6 +582,11 @@ def retrieve_relevant_chunks(query, k=10):
         return cached
 
     db = get_vector_store()
+    if db is None:
+        logger.info("retrieve_relevant_chunks: no vector store available; returning no chunks")
+        _set_cached_results(query, k, [])
+        return []
+
     constraints = _extract_constraints(query)
 
     # Pull many candidates so the reranker can find date/type matches reliably.
@@ -445,8 +598,14 @@ def retrieve_relevant_chunks(query, k=10):
     live_results = [(doc, score) for doc, score in raw_results if _is_live_source(doc)]
     if raw_results and not live_results:
         logger.warning("All retrieved chunks were stale. Rebuilding vector store and retrying query=%r", query)
-        create_vector_store()
+        rebuilt = create_vector_store()
+        if rebuilt is None:
+            _set_cached_results(query, k, [])
+            return []
         db = get_vector_store()
+        if db is None:
+            _set_cached_results(query, k, [])
+            return []
         raw_results = db.similarity_search_with_score(query, k=candidate_count)
         raw_results = [(doc, _normalize_semantic_score(distance)) for doc, distance in raw_results]
         live_results = [(doc, score) for doc, score in raw_results if _is_live_source(doc)]
@@ -460,13 +619,21 @@ def retrieve_relevant_chunks(query, k=10):
         text = (doc.page_content or "").lower()
         temporal_ok = _doc_matches_temporal(text, constraints)
         fraud_ok = _doc_matches_fraud(text, constraints)
-        reranked.append((doc, float(combined_score), temporal_ok, fraud_ok))
+        person_ok = _doc_matches_person(text, constraints)
+        reranked.append((doc, float(combined_score), temporal_ok, fraud_ok, person_ok))
 
-    strict_matches = [item for item in reranked if item[2] and item[3]]
-    temporal_only_matches = [item for item in reranked if item[2]]
+    strict_matches = [item for item in reranked if item[2] and item[3] and item[4]]
+    person_only_matches = [item for item in reranked if item[4]]
+    temporal_only_matches = [item for item in reranked if item[2] and item[3]]
 
     if strict_matches:
         working_set = strict_matches
+    elif person_only_matches and constraints.get("person_tokens"):
+        working_set = person_only_matches
+    elif constraints.get("person_tokens"):
+        logger.info("No person-constrained match found for query=%r; returning no chunks", query)
+        _set_cached_results(query, k, [])
+        return []
     elif temporal_only_matches:
         working_set = temporal_only_matches
     elif _has_temporal_constraint(constraints):
@@ -484,7 +651,7 @@ def retrieve_relevant_chunks(query, k=10):
         working_set = reranked
 
     working_set.sort(key=lambda item: item[1], reverse=True)
-    selected = [(doc, score) for doc, score, _, _ in working_set[:k]]
+    selected = [(doc, score) for doc, score, _, _, _ in working_set[:k]]
 
     logger.info(
         "retrieve_relevant_chunks query=%r candidates=%s strict=%s temporal=%s selected=%s",
