@@ -1,0 +1,15 @@
+{
+  "liveServer.settings.ignoreFiles": [
+    "**/.vscode/**",
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/runtime/**",
+    "**/backend/**",
+    "**/chroma_db/**",
+    "**/generated_files/**",
+    "**/*.db",
+    "**/*.sqlite",
+    "**/*.sqlite3"
+  ],
+  "liveServer.settings.fullReload": false
+}

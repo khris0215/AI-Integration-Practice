@@ -32,6 +32,10 @@ LABEL_TO_FIELD = {
     "action taken": "actions_taken",
     "recommendations": "recommendations",
     "recommended next actions": "recommendations",
+    "system suggestions": "recommendations",
+    "system suggestion": "recommendations",
+    "suggested actions": "recommendations",
+    "next steps": "recommendations",
     "incident id": "incident_id",
     "incident number": "incident_id",
     "type": "type",
@@ -531,6 +535,87 @@ def validate_docx(docx_bytes: bytes) -> bool:
     except Exception as exc:
         logger.exception("DOCX validation failed: %s", exc)
         return False
+
+
+def text_to_docx_bytes(text: str) -> bytes:
+    """Render plain text content into a simple editable DOCX."""
+    doc = Document()
+    lines = str(text or "").splitlines()
+    if not lines:
+        doc.add_paragraph("")
+    else:
+        for line in lines:
+            doc.add_paragraph(line)
+
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+def docx_bytes_to_plain_text(docx_bytes: bytes) -> str:
+    """Extract readable paragraph text from generated DOCX bytes."""
+    doc = Document(io.BytesIO(docx_bytes))
+    lines = []
+    for paragraph in _iter_all_paragraphs(doc):
+        value = (paragraph.text or "").rstrip()
+        if value:
+            lines.append(value)
+    return "\n".join(lines).strip()
+
+
+def text_to_pdf_bytes(text: str, title: str = "Filled Template") -> bytes:
+    """Render plain text into a PDF document for download."""
+    try:
+        from reportlab.lib.pagesizes import LETTER
+        from reportlab.lib.utils import simpleSplit
+        from reportlab.pdfgen import canvas
+    except Exception as exc:
+        raise RuntimeError("PDF export dependency missing. Install reportlab in backend environment.") from exc
+
+    output = io.BytesIO()
+    pdf = canvas.Canvas(output, pagesize=LETTER)
+    width, height = LETTER
+
+    left = 50
+    right = width - 50
+    top = height - 55
+    bottom = 55
+    line_height = 14
+
+    pdf.setTitle(title)
+    pdf.setFont("Helvetica", 11)
+
+    y = top
+    # Helvetica does not reliably render unicode checkbox glyphs.
+    # Convert them to explicit ASCII markers so checked states are visible.
+    normalized_text = str(text or "")
+    normalized_text = normalized_text.replace("☑", "[x]")
+    normalized_text = normalized_text.replace("☒", "[x]")
+    normalized_text = normalized_text.replace("☐", "[ ]")
+    normalized_text = normalized_text.replace("□", "[ ]")
+
+    paragraphs = normalized_text.splitlines() or [""]
+    for paragraph in paragraphs:
+        wrapped_lines = simpleSplit(paragraph, "Helvetica", 11, right - left) or [""]
+        for line in wrapped_lines:
+            if y < bottom:
+                pdf.showPage()
+                pdf.setFont("Helvetica", 11)
+                y = top
+            pdf.drawString(left, y, line)
+            y -= line_height
+
+        # paragraph spacing
+        y -= 4
+        if y < bottom:
+            pdf.showPage()
+            pdf.setFont("Helvetica", 11)
+            y = top
+
+    pdf.save()
+    output.seek(0)
+    return output.getvalue()
 
 
 def fill_pdf_form(template_bytes: bytes, data: dict) -> bytes:

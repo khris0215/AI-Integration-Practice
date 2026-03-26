@@ -18,9 +18,17 @@ file_dump/
 generated_files/
 runtime/
 
+runtime/conversations.db
+
 # Environment variables
 .env
+backend/.env
+frontend/.env
+
 
 # OS junk
 .DS_Store
 Thumbs.db
+
+ToDo.txt
+

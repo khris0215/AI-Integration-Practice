@@ -17,6 +17,7 @@ docxtpl
 pillow
 pdfrw
 lxml
+reportlab
 # Optional OCR:
 # pytesseract
 # pdf2image

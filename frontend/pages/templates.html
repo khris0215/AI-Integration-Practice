@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Testing AI · Templates</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../css/style.css">
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'media',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            ink: '#030712',
+                            dusk: '#0f172a',
+                            foam: '#0ea5e9',
+                            mint: '#10b981',
+                            gold: '#fbbf24'
+                        }
+                    },
+                    fontFamily: {
+                        display: ['IBM Plex Sans', 'sans-serif'],
+                        body: ['IBM Plex Sans', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="templates-page min-h-screen bg-slate-50 text-slate-900 dark:bg-brand-ink dark:text-slate-100 transition-colors">
+    <div class="glow bg-brand-foam/30 -top-32 right-0"></div>
+    <div class="glow bg-brand-leaf/30 bottom-0 left-0"></div>
+
+    <div class="relative z-10 min-h-screen flex">
+        <aside class="console-sidebar glass-panel card-shadow" data-sidebar data-collapsed="false">
+            <div class="sidebar-top">
+                <a href="../index.html" class="sidebar-brand" data-sidebar-brand>
+                    <img src="../assets/logo/landbank-logo.png" alt="LandBank logo" class="sidebar-logo">
+                    <div class="sidebar-brand-text">
+                        <span class="sidebar-brand-title">Testing AI</span>
+                        <span class="sidebar-brand-tagline">Anti-Fraud Console</span>
+                    </div>
+                </a>
+            </div>
+            <nav class="sidebar-nav" aria-label="Primary">
+                <a href="../landing-page.html#console" class="sidebar-link">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="6" y="6" width="12" height="12" rx="3"></rect>
+                            <path d="M9 9h6v6H9z"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Console</span>
+                </a>
+                <a href="templates.html" class="sidebar-link is-active">
+                    <span class="nav-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M7 4h7l4 4v12H7z"></path>
+                            <path d="M14 4v4h4"></path>
+                            <path d="M10 12h6"></path>
+                            <path d="M10 16h6"></path>
+                        </svg>
+                    </span>
+                    <span class="sidebar-label">Templates</span>
+                </a>
+            </nav>
+            <div class="sidebar-divider" aria-hidden="true"></div>
+            <section class="chat-history" aria-label="Chat history">
+                <div class="chat-history__header">
+                    <div>
+                        <p class="chat-history__eyebrow">Template control</p>
+                        <p class="chat-history__title">Registry snapshot</p>
+                    </div>
+                    <button type="button" id="refresh-templates-btn" class="chat-history__new">Refresh</button>
+                </div>
+                <div class="chat-history__list">
+                    <ul class="chat-thread" id="template-sidebar-list" role="list">
+                        <li class="chat-thread__empty">Loading templates...</li>
+                    </ul>
+                </div>
+            </section>
+            <div class="sidebar-meta">
+                <p>Anti-Fraud Desk</p>
+                <p>© <span id="year"></span> Testing AI</p>
+            </div>
+            <button type="button" class="sidebar-fab" aria-label="Collapse sidebar" data-sidebar-toggle data-direction="collapse">
+                <span class="sidebar-fab__icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 6l6 6-6 6"></path>
+                    </svg>
+                </span>
+            </button>
+        </aside>
+
+        <div class="flex-1 flex flex-col">
+            <main class="flex-1 px-4 sm:px-6 lg:px-16 py-8 lg:py-12">
+                <div class="max-w-6xl w-full mx-auto space-y-8">
+                    <section class="glass-panel rounded-[2.5rem] p-6 sm:p-8 lg:p-10 card-shadow">
+                        <p class="text-sm uppercase tracking-[0.5em] text-brand-foam">Templates</p>
+                        <h1 class="mt-4 text-3xl sm:text-4xl xl:text-5xl font-display font-semibold">Mock Template Configuration</h1>
+                        <p class="mt-4 text-base sm:text-lg text-slate-600 dark:text-slate-300">This is a mock configuration screen for defining which templates are available to AI-assisted filling.</p>
+                    </section>
+
+                    <section class="grid gap-5 lg:grid-cols-2">
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-4">
+                            <h2 class="text-2xl font-display font-semibold">Template Registry</h2>
+                            <div id="template-registry-list" class="space-y-3 text-sm">
+                                <div class="rounded-2xl border border-slate-200 dark:border-white/10 p-4 text-slate-500 dark:text-slate-300">Loading templates...</div>
+                            </div>
+                        </article>
+
+                        <article class="rounded-3xl border border-slate-200 dark:border-white/10 p-6 space-y-4">
+                            <h2 class="text-2xl font-display font-semibold">Upload New Template</h2>
+                            <form id="template-upload-form" class="space-y-3">
+                                <label class="block text-sm">
+                                    <span class="block mb-1">Template file (.txt or .docx)</span>
+                                    <input required name="file" type="file" accept=".txt,.docx" class="w-full rounded-xl border border-slate-300 dark:border-white/20 bg-white/80 dark:bg-white/5">
+                                </label>
+                                <div class="grid gap-3 sm:grid-cols-2">
+                                    <label class="block text-sm">
+                                        <span class="block mb-1">Name</span>
+                                        <input name="name" type="text" placeholder="CFIR Branch Pack" class="w-full rounded-xl border border-slate-300 dark:border-white/20 bg-white/80 dark:bg-white/5">
+                                    </label>
+                                    <label class="block text-sm">
+                                        <span class="block mb-1">Type</span>
+                                        <input name="template_type" type="text" value="custom" class="w-full rounded-xl border border-slate-300 dark:border-white/20 bg-white/80 dark:bg-white/5">
+                                    </label>
+                                </div>
+                                <div class="grid gap-3 sm:grid-cols-2">
+                                    <label class="block text-sm">
+                                        <span class="block mb-1">Owner team</span>
+                                        <input name="owner_team" type="text" value="Fraud Ops" class="w-full rounded-xl border border-slate-300 dark:border-white/20 bg-white/80 dark:bg-white/5">
+                                    </label>
+                                    <label class="block text-sm">
+                                        <span class="block mb-1">Fields (comma-separated)</span>
+                                        <input name="fields" type="text" placeholder="incident_id,date,type,description" class="w-full rounded-xl border border-slate-300 dark:border-white/20 bg-white/80 dark:bg-white/5">
+                                    </label>
+                                </div>
+                                <div class="flex flex-wrap gap-4 text-sm">
+                                    <label class="inline-flex items-center gap-2">
+                                        <input name="active" type="checkbox" checked class="rounded border-slate-300 text-brand-foam focus:ring-brand-foam">
+                                        <span>Active</span>
+                                    </label>
+                                    <label class="inline-flex items-center gap-2">
+                                        <input name="is_default" type="checkbox" class="rounded border-slate-300 text-brand-foam focus:ring-brand-foam">
+                                        <span>Set as default</span>
+                                    </label>
+                                </div>
+                                <div class="pt-1">
+                                    <button type="submit" class="rounded-full bg-brand-foam px-5 py-2 text-brand-ink font-semibold">Upload template</button>
+                                </div>
+                            </form>
+                            <div id="template-feedback" class="hidden rounded-xl border px-3 py-2 text-sm"></div>
+                        </article>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="../script.js" defer></script>
+    <script>
+        document.getElementById('year').textContent = new Date().getFullYear();
+
+        (() => {
+            const API_BASE = 'http://localhost:8000/api';
+            const registryList = document.getElementById('template-registry-list');
+            const sidebarList = document.getElementById('template-sidebar-list');
+            const refreshButton = document.getElementById('refresh-templates-btn');
+            const uploadForm = document.getElementById('template-upload-form');
+            const feedback = document.getElementById('template-feedback');
+
+            function showFeedback(message, type = 'info') {
+                if (!feedback) {
+                    return;
+                }
+                if (!message) {
+                    feedback.textContent = '';
+                    feedback.className = 'hidden rounded-xl border px-3 py-2 text-sm';
+                    return;
+                }
+
+                const toneClass = type === 'error'
+                    ? 'border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-400/30 dark:bg-rose-400/10 dark:text-rose-200'
+                    : 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-200';
+                feedback.textContent = message;
+                feedback.className = `rounded-xl border px-3 py-2 text-sm ${toneClass}`;
+            }
+
+            async function patchTemplate(templateId, patch) {
+                const response = await fetch(`${API_BASE}/templates/${encodeURIComponent(templateId)}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(patch),
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || `Unable to update template (${response.status})`);
+                }
+                return response.json();
+            }
+
+            function renderSidebar(templates) {
+                if (!sidebarList) {
+                    return;
+                }
+
+                sidebarList.innerHTML = '';
+                if (!templates.length) {
+                    const empty = document.createElement('li');
+                    empty.className = 'chat-thread__empty';
+                    empty.textContent = 'No templates available.';
+                    sidebarList.appendChild(empty);
+                    return;
+                }
+
+                templates.forEach((template) => {
+                    const li = document.createElement('li');
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = `chat-thread__item${template.is_default ? ' is-active' : ''}`;
+                    btn.innerHTML = `
+                        <div class="chat-thread__meta">
+                            <span class="chat-thread__label"></span>
+                            <span class="chat-thread__time"></span>
+                        </div>
+                        <p></p>
+                    `;
+
+                    btn.querySelector('.chat-thread__label').textContent = template.name || template.filename || template.id;
+                    btn.querySelector('.chat-thread__time').textContent = template.is_default ? 'Default' : (template.active === false ? 'Inactive' : 'Active');
+                    btn.querySelector('p').textContent = (Array.isArray(template.fields) && template.fields.length)
+                        ? `Fields: ${template.fields.join(', ')}`
+                        : 'No mapped fields';
+                    li.appendChild(btn);
+                    sidebarList.appendChild(li);
+                });
+            }
+
+            function renderRegistry(templates) {
+                if (!registryList) {
+                    return;
+                }
+
+                registryList.innerHTML = '';
+                if (!templates.length) {
+                    const empty = document.createElement('div');
+                    empty.className = 'rounded-2xl border border-slate-200 dark:border-white/10 p-4 text-slate-500 dark:text-slate-300';
+                    empty.textContent = 'No templates found.';
+                    registryList.appendChild(empty);
+                    return;
+                }
+
+                templates.forEach((template) => {
+                    const card = document.createElement('div');
+                    card.className = 'rounded-2xl border border-slate-200 dark:border-white/10 p-4 space-y-2';
+
+                    const fieldCount = Array.isArray(template.fields) ? template.fields.length : 0;
+                    const statusLabel = template.active === false ? 'Inactive' : 'Active';
+                    const defaultLabel = template.is_default ? ' | Default' : '';
+
+                    card.innerHTML = `
+                        <p class="font-semibold"></p>
+                        <p class="text-slate-500 dark:text-slate-300"></p>
+                        <p class="text-slate-500 dark:text-slate-300"></p>
+                        <div class="flex flex-wrap gap-2 pt-1">
+                            <button type="button" class="set-default-btn rounded-full border border-slate-300 dark:border-white/20 px-3 py-1 text-xs font-semibold">Set default</button>
+                            <button type="button" class="toggle-active-btn rounded-full border border-slate-300 dark:border-white/20 px-3 py-1 text-xs font-semibold"></button>
+                        </div>
+                    `;
+
+                    const [nameEl, statusEl, fieldsEl] = card.querySelectorAll('p');
+                    nameEl.textContent = template.name || template.filename || template.id;
+                    statusEl.textContent = `Status: ${statusLabel}${defaultLabel}`;
+                    fieldsEl.textContent = `Fields mapped: ${fieldCount}`;
+
+                    const setDefaultBtn = card.querySelector('.set-default-btn');
+                    const toggleActiveBtn = card.querySelector('.toggle-active-btn');
+                    toggleActiveBtn.textContent = template.active === false ? 'Activate' : 'Deactivate';
+
+                    setDefaultBtn.addEventListener('click', async () => {
+                        try {
+                            await patchTemplate(template.id, { is_default: true });
+                            showFeedback('Default template updated.');
+                            await loadTemplates();
+                        } catch (error) {
+                            showFeedback(error.message || 'Failed to update default template.', 'error');
+                        }
+                    });
+
+                    toggleActiveBtn.addEventListener('click', async () => {
+                        try {
+                            await patchTemplate(template.id, { active: template.active === false });
+                            showFeedback('Template status updated.');
+                            await loadTemplates();
+                        } catch (error) {
+                            showFeedback(error.message || 'Failed to update template status.', 'error');
+                        }
+                    });
+
+                    registryList.appendChild(card);
+                });
+            }
+
+            async function loadTemplates() {
+                try {
+                    const response = await fetch(`${API_BASE}/templates`, { method: 'GET', cache: 'no-store' });
+                    if (!response.ok) {
+                        throw new Error(`Unable to load templates (${response.status})`);
+                    }
+                    const templates = await response.json();
+                    const normalized = Array.isArray(templates) ? templates : [];
+                    renderSidebar(normalized);
+                    renderRegistry(normalized);
+                } catch (error) {
+                    showFeedback(error.message || 'Unable to load templates.', 'error');
+                }
+            }
+
+            if (uploadForm) {
+                uploadForm.addEventListener('submit', async (event) => {
+                    event.preventDefault();
+                    const formData = new FormData(uploadForm);
+                    const activeField = uploadForm.querySelector('input[name="active"]');
+                    const defaultField = uploadForm.querySelector('input[name="is_default"]');
+
+                    formData.set('active', String(Boolean(activeField?.checked)));
+                    formData.set('is_default', String(Boolean(defaultField?.checked)));
+
+                    try {
+                        showFeedback('Uploading template...');
+                        const response = await fetch(`${API_BASE}/templates/upload`, {
+                            method: 'POST',
+                            body: formData,
+                        });
+                        if (!response.ok) {
+                            const errorText = await response.text();
+                            throw new Error(errorText || `Template upload failed (${response.status})`);
+                        }
+
+                        uploadForm.reset();
+                        showFeedback('Template uploaded successfully.');
+                        await loadTemplates();
+                    } catch (error) {
+                        showFeedback(error.message || 'Template upload failed.', 'error');
+                    }
+                });
+            }
+
+            refreshButton?.addEventListener('click', () => {
+                void loadTemplates();
+            });
+
+            void loadTemplates();
+        })();
+    </script>
+</body>
+</html>

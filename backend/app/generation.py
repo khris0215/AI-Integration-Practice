@@ -1,13 +1,16 @@
 import json
 import logging
 import re
+import time
 
 import requests
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "mistral:7b"
+OLLAMA_TAGS_URL = "http://localhost:11434/api/tags"
+MODEL = "mistral:7b-instruct-q4_K_M"
 OLLAMA_CONNECT_TIMEOUT_S = 10
 OLLAMA_READ_TIMEOUT_S = 60
+OLLAMA_MAX_ATTEMPTS = 3
 logger = logging.getLogger(__name__)
 
 DEFAULT_EXTRACTION_FIELDS = [
@@ -31,6 +34,81 @@ DEFAULT_EXTRACTION_FIELDS = [
 ]
 
 
+def _get_available_ollama_models() -> list[str]:
+    try:
+        response = requests.get(OLLAMA_TAGS_URL, timeout=(OLLAMA_CONNECT_TIMEOUT_S, 8))
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+        items = payload.get("models", []) if isinstance(payload, dict) else []
+        names = []
+        for item in items:
+            name = str((item or {}).get("name") or "").strip()
+            if name:
+                names.append(name)
+        return names
+    except Exception:
+        return []
+
+
+def _fallback_chat_from_context(context: str, use_incident_context: bool) -> str:
+    text = str(context or "").strip()
+    if not use_incident_context:
+        return "I cannot reach a valid Ollama model right now, so I can only answer from indexed incident context."
+
+    if not text or text.lower().startswith("no relevant documents found"):
+        return "I could not find supporting incident records in the indexed files for that request."
+
+    fields = _extract_from_context(
+        text,
+        [
+            "incident_id",
+            "date",
+            "time",
+            "type",
+            "reporter_name",
+            "description",
+            "impact",
+            "actions_taken",
+            "evidence_list",
+            "recommendations",
+        ],
+    )
+
+    summary_lines = []
+    if fields.get("incident_id"):
+        summary_lines.append(f"Incident ID: {fields['incident_id']}")
+    if fields.get("date"):
+        summary_lines.append(f"Date: {fields['date']}")
+    if fields.get("time"):
+        summary_lines.append(f"Time: {fields['time']}")
+    if fields.get("type"):
+        summary_lines.append(f"Type: {fields['type']}")
+    if fields.get("reporter_name"):
+        summary_lines.append(f"Reporter: {fields['reporter_name']}")
+
+    detail_blocks = []
+    if fields.get("description"):
+        detail_blocks.append(f"Description:\n{fields['description']}")
+    if fields.get("impact"):
+        detail_blocks.append(f"Impact:\n{fields['impact']}")
+    if fields.get("actions_taken"):
+        detail_blocks.append(f"Actions taken:\n{fields['actions_taken']}")
+    if fields.get("evidence_list"):
+        detail_blocks.append(f"Evidence collected:\n{fields['evidence_list']}")
+    if fields.get("recommendations"):
+        detail_blocks.append(f"Recommended next actions:\n{fields['recommendations']}")
+
+    if not summary_lines and not detail_blocks:
+        return "I found relevant incident context, but no concise extractable fields were available while the model endpoint is unavailable."
+
+    response_parts = []
+    if summary_lines:
+        response_parts.append("\n".join(summary_lines))
+    if detail_blocks:
+        response_parts.append("\n\n".join(detail_blocks))
+    return "\n\n".join(response_parts)
+
+
 def _is_missing_value(value) -> bool:
     if value is None:
         return True
@@ -52,7 +130,16 @@ def _extract_from_context(context: str, fields: list) -> dict:
         "description": ["description", "incident description", "full narrative", "narrative"],
         "impact": ["impact", "business impact", "losses", "damage"],
         "actions_taken": ["actions taken", "action taken", "steps taken", "mitigation"],
-        "recommendations": ["recommended next actions", "next actions", "recommended actions", "recommendations"],
+        "recommendations": [
+            "recommended next actions",
+            "next actions",
+            "recommended actions",
+            "recommendations",
+            "system suggestions",
+            "system suggestion",
+            "suggested actions",
+            "next steps",
+        ],
         "reporter_name": ["reporter name", "reported by", "name"],
         "department": ["department"],
         "contact_number": ["contact number", "phone", "mobile", "contact"],
@@ -87,12 +174,70 @@ def _extract_from_context(context: str, fields: list) -> dict:
     return extracted
 
 
-def _ollama_post(payload: dict, read_timeout: int = OLLAMA_READ_TIMEOUT_S):
-    return requests.post(
-        OLLAMA_URL,
-        json=payload,
-        timeout=(OLLAMA_CONNECT_TIMEOUT_S, read_timeout),
-    )
+def _ollama_post(
+    payload: dict,
+    read_timeout: int = OLLAMA_READ_TIMEOUT_S,
+    max_attempts: int = OLLAMA_MAX_ATTEMPTS,
+):
+    """POST to Ollama with bounded retry for transient failures."""
+    base_payload = dict(payload or {})
+    preferred_model = str(base_payload.get("model") or MODEL).strip() or MODEL
+    discovered = _get_available_ollama_models()
+    model_candidates = [preferred_model]
+    if MODEL not in model_candidates:
+        model_candidates.append(MODEL)
+    for model_name in discovered:
+        if model_name not in model_candidates:
+            model_candidates.append(model_name)
+
+    attempts = max(1, int(max_attempts or 1))
+
+    for candidate in model_candidates:
+        request_payload = dict(base_payload)
+        request_payload["model"] = candidate
+
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.post(
+                    OLLAMA_URL,
+                    json=request_payload,
+                    timeout=(OLLAMA_CONNECT_TIMEOUT_S, read_timeout),
+                )
+
+                # If model is unavailable, try the next installed model candidate.
+                if response.status_code == 404:
+                    logger.warning("Ollama model unavailable: %s", candidate)
+                    break
+
+                # Retry transient server-side failures.
+                if response.status_code in {500, 502, 503, 504} and attempt < attempts:
+                    wait_s = min(2.0, 0.5 * attempt)
+                    logger.warning(
+                        "Ollama transient HTTP %s on attempt %s/%s; retrying in %.1fs",
+                        response.status_code,
+                        attempt,
+                        attempts,
+                        wait_s,
+                    )
+                    time.sleep(wait_s)
+                    continue
+
+                return response
+            except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as exc:
+                if attempt >= attempts:
+                    raise
+                wait_s = min(2.0, 0.5 * attempt)
+                logger.warning(
+                    "Ollama request failed on attempt %s/%s (%s); retrying in %.1fs",
+                    attempt,
+                    attempts,
+                    exc,
+                    wait_s,
+                )
+                time.sleep(wait_s)
+
+    # Defensive fallback; loop should always return or raise.
+    raise RuntimeError("Ollama has no available models for generation. Run `ollama list` and pull at least one model.")
 
 
 def infer_value_from_context(label: str, context: str, model: str = MODEL) -> str:
@@ -118,7 +263,15 @@ def infer_value_from_context(label: str, context: str, model: str = MODEL) -> st
         "description": ["description", "incident description", "full narrative"],
         "impact": ["impact"],
         "actions taken": ["actions taken", "action taken", "steps taken"],
-        "recommended next actions": ["recommended next actions", "recommendations", "next actions"],
+        "recommended next actions": [
+            "recommended next actions",
+            "recommendations",
+            "next actions",
+            "system suggestions",
+            "system suggestion",
+            "suggested actions",
+            "next steps",
+        ],
     }
 
     regex_labels = alias_map.get(normalized_label, [normalized_label] if normalized_label else [])
@@ -241,6 +394,80 @@ Actions taken: [copy from context]
         return f"Error generating response: {str(e)}"
 
 
+def build_incident_details_response(context: str) -> str:
+    """Build a deterministic full-details incident response from retrieved context."""
+    fields = _extract_from_context(
+        context or "",
+        [
+            "incident_id",
+            "date",
+            "time",
+            "type",
+            "reporter_name",
+            "department",
+            "contact_number",
+            "email",
+            "description",
+            "impact",
+            "actions_taken",
+            "evidence_list",
+            "recommendations",
+            "location",
+            "system",
+        ],
+    )
+
+    recommendations = str(fields.get("recommendations") or "").strip()
+    if not recommendations:
+        recommendations = synthesize_recommendations({"type": fields.get("type"), "recommendations": ""})
+
+    lines = []
+    if fields.get("incident_id"):
+        lines.append(f"Incident ID: {fields['incident_id']}")
+    if fields.get("date"):
+        lines.append(f"Date: {fields['date']}")
+    if fields.get("time"):
+        lines.append(f"Time: {fields['time']}")
+    if fields.get("type"):
+        lines.append(f"Type: {fields['type']}")
+
+    reporter_bits = []
+    if fields.get("reporter_name"):
+        reporter_bits.append(f"Name: {fields['reporter_name']}")
+    if fields.get("department"):
+        reporter_bits.append(f"Department: {fields['department']}")
+    if fields.get("contact_number"):
+        reporter_bits.append(f"Contact Number: {fields['contact_number']}")
+    if fields.get("email"):
+        reporter_bits.append(f"Email: {fields['email']}")
+    if reporter_bits:
+        lines.append("\nReporter Information:\n" + "\n".join(reporter_bits))
+
+    loc_system = []
+    if fields.get("location"):
+        loc_system.append(f"Location: {fields['location']}")
+    if fields.get("system"):
+        loc_system.append(f"System Affected: {fields['system']}")
+    if loc_system:
+        lines.append("\nAffected Scope:\n" + "\n".join(loc_system))
+
+    if fields.get("description"):
+        lines.append("\nDescription:\n" + str(fields["description"]).strip())
+    if fields.get("impact"):
+        lines.append("\nImpact:\n" + str(fields["impact"]).strip())
+    if fields.get("actions_taken"):
+        lines.append("\nActions Taken:\n" + str(fields["actions_taken"]).strip())
+    if fields.get("evidence_list"):
+        lines.append("\nEvidence Collected:\n" + str(fields["evidence_list"]).strip())
+    if recommendations:
+        lines.append("\nRecommended Next Actions:\n" + recommendations)
+
+    if not lines:
+        return "I found incident context, but key fields could not be extracted reliably. Please provide incident ID or date."
+
+    return "\n".join(lines).strip()
+
+
 def chat_response(
     conversation_history: str,
     context: str,
@@ -254,14 +481,14 @@ def chat_response(
     style_instruction = (
         "Answer in 1-3 short sentences unless the user explicitly asks for a detailed report."
         if not use_incident_context
-        else "Prefer precise, concise incident answers."
+        else "For incident prompts asking full/complete details, provide structured sections: incident id/date/time/type, description, impact, actions taken, and recommendations when available."
     )
 
     prompt = f"""You are an AI assistant helping with fraud incidents.
 Answer ONLY the latest user prompt.
 
 Rules:
-- Do not continue prior tasks unless the latest user prompt explicitly asks to continue them.
+- Use conversation continuity for follow-up prompts such as "full details", "complete details", "expand", or "more info", based on the most recent incident topic in history.
 - Do not append extra summaries from earlier turns when they are unrelated.
 - If the latest user prompt is general (for example spelling/grammar wording), answer it directly and briefly.
 - Retrieval context mode is {incident_context_mode}. If mode is disabled, do not reference incident reports unless user explicitly asks for them.
@@ -293,15 +520,18 @@ Now provide your response to the latest user turn:
     }
 
     try:
-        response = _ollama_post(payload)
+        response = _ollama_post(payload, read_timeout=90, max_attempts=2)
         response.raise_for_status()
         return str(response.json().get("response", "")).strip()
     except requests.exceptions.ConnectionError:
-        return "Error: Cannot connect to Ollama. Is it running? (Run 'ollama serve')"
+        logger.warning("chat_response connection error to Ollama")
+        return _fallback_chat_from_context(context, use_incident_context)
     except requests.exceptions.ReadTimeout:
-        return "Error: Ollama timed out while generating. Try again or reduce prompt size."
+        logger.warning("chat_response timed out in Ollama")
+        return _fallback_chat_from_context(context, use_incident_context)
     except Exception as exc:
-        return f"Error generating response: {str(exc)}"
+        logger.warning("chat_response failed; using context fallback: %s", exc)
+        return _fallback_chat_from_context(context, use_incident_context)
 
 
 def generate_conversation_title(
@@ -332,7 +562,7 @@ Title:
     }
 
     try:
-        response = _ollama_post(payload, read_timeout=60)
+        response = _ollama_post(payload, read_timeout=20, max_attempts=1)
         response.raise_for_status()
         raw = str(response.json().get("response", "")).strip()
         if not raw:
@@ -346,6 +576,97 @@ Title:
         return title[:120]
     except Exception:
         return ""
+
+
+def classify_user_intent(
+    prompt: str,
+    *,
+    has_selected_template: bool = False,
+    has_uploaded_template: bool = False,
+    model: str = MODEL,
+) -> dict:
+    text = str(prompt or "").strip()
+    lowered = text.lower()
+
+    template_keywords = [
+        "fill template",
+        "populate template",
+        "generate report",
+        "complete this template",
+        "draft report",
+        "cfir",
+    ]
+    retrieval_keywords = [
+        "show source",
+        "retrieve",
+        "find in files",
+        "search documents",
+        "what incident",
+    ]
+
+    has_fill_verb = any(token in lowered for token in ["fill", "populate", "complete", "draft", "generate", "create"])
+    has_template_noun = any(token in lowered for token in ["template", "report", "cfir", "form"])
+
+    if has_selected_template and has_fill_verb and has_template_noun:
+        return {"intent": "fill_template", "confidence": 0.95, "reason": "selected template with explicit fill intent"}
+
+    if has_selected_template and has_template_noun:
+        return {"intent": "fill_template", "confidence": 0.78, "reason": "selected template and template/report referenced"}
+
+    if has_uploaded_template and any(token in lowered for token in ["fill", "template", "populate", "report"]):
+        return {"intent": "fill_template", "confidence": 0.9, "reason": "uploaded template and fill intent terms detected"}
+
+    if any(token in lowered for token in template_keywords):
+        return {"intent": "fill_template", "confidence": 0.78, "reason": "template-related keywords detected"}
+
+    if any(token in lowered for token in retrieval_keywords):
+        return {"intent": "retrieve_only", "confidence": 0.72, "reason": "retrieval-focused keywords detected"}
+
+    # Fallback to model-based classification for ambiguous prompts.
+    classify_prompt = f"""Classify the user request intent into one of:
+- query
+- fill_template
+- retrieve_only
+
+Return strict JSON object only with keys: intent, confidence, reason.
+confidence must be a number between 0 and 1.
+
+Context:
+- has_selected_template={has_selected_template}
+- has_uploaded_template={has_uploaded_template}
+
+User prompt:
+{text}
+"""
+
+    payload = {
+        "model": model,
+        "prompt": classify_prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.0,
+            "max_tokens": 120,
+        },
+    }
+
+    try:
+        response = _ollama_post(payload, read_timeout=30)
+        response.raise_for_status()
+        raw = str(response.json().get("response", "")).strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            raw = raw.replace("json", "", 1).strip()
+        parsed = json.loads(raw)
+        intent = str(parsed.get("intent", "query")).strip().lower()
+        confidence = float(parsed.get("confidence", 0.55))
+        reason = str(parsed.get("reason", "llm fallback classification"))
+        if intent not in {"query", "fill_template", "retrieve_only"}:
+            intent = "query"
+        confidence = max(0.0, min(1.0, confidence))
+        return {"intent": intent, "confidence": confidence, "reason": reason}
+    except Exception as exc:
+        logger.warning("classify_user_intent fallback failed: %s", exc)
+        return {"intent": "query", "confidence": 0.55, "reason": "default fallback"}
 
 
 def fill_template(template: str, context: str, query: str, model: str = MODEL, temperature: float = 0.0) -> str:
@@ -389,6 +710,10 @@ def fill_template(template: str, context: str, query: str, model: str = MODEL, t
             "impact": "impact",
             "actions taken": "actions_taken",
             "recommended next actions": "recommended_next_actions",
+            "system suggestions": "recommended_next_actions",
+            "system suggestion": "recommended_next_actions",
+            "suggested actions": "recommended_next_actions",
+            "next steps": "recommended_next_actions",
             "name": "reporter_name",
             "reporter name": "reporter_name",
             "department": "department",
@@ -467,6 +792,7 @@ def fill_template(template: str, context: str, query: str, model: str = MODEL, t
     set_section_body(lines, "incident description", as_fill_value(extracted.get("description")))
     set_section_body(lines, "actions taken", as_fill_value(extracted.get("actions_taken")))
     set_section_body(lines, "recommended next actions", as_fill_value(extracted.get("recommended_next_actions")))
+    set_section_body(lines, "system suggestions", as_fill_value(extracted.get("recommended_next_actions")))
     apply_checkbox_lines(lines, as_fill_value(extracted.get("type")))
 
     filled_text = "\n".join(lines)

@@ -2,9 +2,12 @@ const API_BASE = 'http://localhost:8000/api';
 const PROMPT_DRAFT_KEY = 'landing-prompt-draft';
 const ERROR_CACHE_KEY = 'landing-error-message';
 const TEMPLATE_FILENAME_KEY = 'landing-template-filename';
+const TEMPLATE_SELECTION_KEY = 'landing-template-selection';
 const ACTIVE_CONVERSATION_KEY = 'landing-active-conversation-id';
 const APP_INIT_GUARD_KEY = '__landingAppInitialized';
+const LOGIN_FRESH_FLAG = 'fresh';
 const QUERY_TIMEOUT_MS = 180000;
+const FRONTEND_TRACE_ENABLED = true;
 
 if (typeof window._backendHealthy !== 'boolean') {
     window._backendHealthy = false;
@@ -12,6 +15,8 @@ if (typeof window._backendHealthy !== 'boolean') {
 
 let initCount = 0;
 const INIT_STACK = [];
+let requestTraceCounter = 0;
+let flowTraceCounter = 0;
 
 function diagTimestamp() {
     return new Date().toISOString();
@@ -20,6 +25,144 @@ function diagTimestamp() {
 function diagLog(level, message, ...args) {
     const fn = console[level] || console.log;
     fn(`[${diagTimestamp()}] ${message}`, ...args);
+}
+
+function shouldPersistError(message) {
+    const normalized = String(message || '').toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    if (normalized.includes('backend is still starting')) {
+        return false;
+    }
+    if (normalized.includes('retrying')) {
+        return false;
+    }
+    if (normalized.includes('temporarily unreachable')) {
+        return false;
+    }
+    if (normalized.includes('request timed out')) {
+        return false;
+    }
+    return true;
+}
+
+function nextTraceId(prefix) {
+    if (prefix === 'req') {
+        requestTraceCounter += 1;
+        return `req-${requestTraceCounter}`;
+    }
+    flowTraceCounter += 1;
+    return `${prefix}-${flowTraceCounter}`;
+}
+
+function summarizePayload(body) {
+    if (body === null || body === undefined) {
+        return { kind: 'none', size: 0 };
+    }
+    if (typeof body === 'string') {
+        return { kind: 'string', size: body.length };
+    }
+    if (body instanceof FormData) {
+        const entries = [];
+        for (const [key, value] of body.entries()) {
+            if (value instanceof File) {
+                entries.push({ key, type: 'file', name: value.name, size: value.size });
+            } else {
+                entries.push({ key, type: 'field', size: String(value || '').length });
+            }
+        }
+        return { kind: 'form-data', fields: entries.length, entries };
+    }
+    return { kind: typeof body, size: 0 };
+}
+
+function traceState(label, details = {}) {
+    if (!FRONTEND_TRACE_ENABLED) {
+        return;
+    }
+    diagLog('log', `[STATE] ${label}`, details);
+}
+
+async function tracedFetch(url, options = {}, meta = {}) {
+    const traceId = meta.traceId || nextTraceId('req');
+    const method = options.method || 'GET';
+    const payload = summarizePayload(options.body);
+    const startedAt = performance.now();
+
+    diagLog('log', `[HTTP ${traceId}] start`, {
+        method,
+        url,
+        payload,
+        meta,
+    });
+
+    try {
+        const response = await fetch(url, options);
+        const durationMs = Math.round(performance.now() - startedAt);
+        const serverTraceId = response.headers.get('x-trace-id') || null;
+        diagLog('log', `[HTTP ${traceId}] end`, {
+            method,
+            url,
+            status: response.status,
+            ok: response.ok,
+            durationMs,
+            serverTraceId,
+            meta,
+        });
+        return response;
+    } catch (error) {
+        const durationMs = Math.round(performance.now() - startedAt);
+        diagLog('error', `[HTTP ${traceId}] failed`, {
+            method,
+            url,
+            durationMs,
+            message: error?.message,
+            name: error?.name,
+            meta,
+        });
+        throw error;
+    }
+}
+
+async function extractApiErrorMessage(response, fallbackMessage) {
+    const fallback = fallbackMessage || `API error: ${response?.status}`;
+    if (!response) {
+        return fallback;
+    }
+
+    try {
+        const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+        if (contentType.includes('application/json')) {
+            const payload = await response.json();
+            const detail = String(payload?.detail || payload?.error || '').trim();
+            if (detail) {
+                return detail;
+            }
+            return fallback;
+        }
+
+        const text = String(await response.text() || '').trim();
+        if (!text) {
+            return fallback;
+        }
+
+        if (text.startsWith('{') && text.endsWith('}')) {
+            try {
+                const payload = JSON.parse(text);
+                const detail = String(payload?.detail || payload?.error || '').trim();
+                if (detail) {
+                    return detail;
+                }
+            } catch (_) {
+                // Fall back to plain text below.
+            }
+        }
+
+        return text;
+    } catch (_) {
+        return fallback;
+    }
 }
 
 function logInit(reason) {
@@ -66,10 +209,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const promptForm = document.getElementById('prompt-form');
     const promptInput = document.getElementById('prompt-input');
     const resultContainer = document.getElementById('result-container');
-    let loadingIndicator = document.getElementById('loading-indicator');
+    let loadingIndicator = null;
     let errorContainer = document.getElementById('error-container');
     const submitButton = document.getElementById('submit-button');
-    const fillTemplateButton = document.getElementById('fill-template-btn');
+    const templateSelect = document.getElementById('template-select');
     const templateFileInput = document.getElementById('template-file');
     const conversationList = document.getElementById('conversation-list');
     const newChatButton = document.getElementById('new-chat-btn');
@@ -83,6 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const sidebarLinks = document.querySelectorAll('.sidebar-nav .sidebar-link');
     const SIDEBAR_STORAGE_KEY = 'landing-sidebar-collapsed';
     const collapseQuery = window.matchMedia('(max-width: 1024px)');
+    const pageFlowId = nextTraceId('flow');
 
     let userPreferenceLocked = false;
     let hideSidebarTooltip = () => {};
@@ -95,11 +239,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let transientMessageId = 0;
     let healthPollStarted = false;
     let healthPollPromise = null;
-    let loadingStartedAtMs = 0;
-    let loadingElapsedInterval = null;
     let loadingProgressTrack = null;
     let loadingProgressFill = null;
     let loadingElapsedText = null;
+    let availableTemplates = [];
 
     if (promptForm) {
         // Guard against accidental page reload if later init code throws.
@@ -108,12 +251,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }, { capture: true });
     }
 
+    traceState('dom-content-loaded', {
+        pageFlowId,
+        backendReady,
+        hasPromptForm: Boolean(promptForm),
+        hasResultContainer: Boolean(resultContainer),
+        hasBackendStatus: Boolean(backendStatus),
+    });
+
     if (backendStatus && !backendReady) {
         backendStatus.textContent = 'Checking backend status...';
         backendStatus.classList.remove('hidden');
     }
 
     ensureStatusContainers();
+    if (consumeFreshSessionFlag()) {
+        startFreshSession();
+    }
     restoreDraftState();
     try {
         initSidebar();
@@ -126,18 +280,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function initializeApp() {
         logInit('initializeApp');
+        traceState('initialize-app-start', { pageFlowId, backendReady });
         const isHealthy = await startHealthPollOnce();
         if (!isHealthy) {
+            traceState('initialize-app-backend-not-healthy', { pageFlowId });
             return;
         }
+        await loadTemplateOptions();
         await refreshConversations();
+        traceState('initialize-app-done', {
+            pageFlowId,
+            backendReady,
+            currentConversationId,
+            conversationCount: Array.isArray(conversations) ? conversations.length : -1,
+        });
     }
 
     function startHealthPollOnce() {
         if (healthPollStarted && healthPollPromise) {
+            traceState('health-poll-reused', { pageFlowId });
             return healthPollPromise;
         }
         healthPollStarted = true;
+        traceState('health-poll-started', { pageFlowId });
         healthPollPromise = pollBackendHealth();
         return healthPollPromise;
     }
@@ -145,6 +310,15 @@ document.addEventListener('DOMContentLoaded', () => {
     if (promptInput) {
         promptInput.addEventListener('input', () => {
             safeSet(PROMPT_DRAFT_KEY, promptInput.value);
+        });
+
+        promptInput.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' || event.shiftKey) {
+                return;
+            }
+
+            event.preventDefault();
+            promptForm?.requestSubmit();
         });
     }
 
@@ -157,9 +331,19 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    if (templateSelect) {
+        templateSelect.addEventListener('change', () => {
+            const selectedValue = String(templateSelect.value || '').trim();
+            safeSet(TEMPLATE_SELECTION_KEY, selectedValue);
+        });
+    }
+
     if (newChatButton) {
         newChatButton.addEventListener('click', async () => {
+            const flowId = nextTraceId('new-chat');
+            traceState('new-chat-click', { flowId, backendReady, activeOperation, currentConversationId });
             if (!backendReady || activeOperation) {
+                traceState('new-chat-blocked', { flowId, backendReady, activeOperation });
                 return;
             }
             currentConversationId = null;
@@ -168,28 +352,44 @@ document.addEventListener('DOMContentLoaded', () => {
             renderConversationList();
             showError('');
             promptInput?.focus();
+            traceState('new-chat-finished', { flowId, currentConversationId });
         });
     }
 
     if (promptForm && promptInput) {
         promptForm.addEventListener('submit', async (event) => {
+            const flowId = nextTraceId('query');
             try {
                 event.preventDefault();
                 diagLog('log', 'submit start', {
+                    flowId,
                     activeOperation,
                     backendReady,
                     currentConversationId,
                 });
-                if (activeOperation === 'query') {
+                if (activeOperation === 'submit') {
+                    traceState('query-cancel-requested', { flowId, currentConversationId });
                     cancelActiveRequest();
                     return;
                 }
-                if (activeOperation && activeOperation !== 'query') {
-                    showError('Template filling is in progress. Please wait for it to finish.');
+                if (activeOperation && activeOperation !== 'submit') {
+                    showError('Another request is in progress. Please wait for it to finish.');
                     return;
                 }
 
                 const prompt = promptInput.value.trim();
+                let selectedTemplateId = String(templateSelect?.value || '').trim();
+                const uploadedTemplateFile = templateFileInput?.files?.[0] || null;
+                const hasUploadedTemplate = Boolean(uploadedTemplateFile);
+                traceState('query-validated-input', {
+                    flowId,
+                    promptLength: prompt.length,
+                    backendReady,
+                    activeOperation,
+                    currentConversationId,
+                    selectedTemplateId,
+                    hasUploadedTemplate,
+                });
 
                 if (!backendReady) {
                     showError('Backend is still starting. Please wait until status shows connected.');
@@ -202,43 +402,157 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 showError('');
-                activeOperation = 'query';
-                showLoading(true, 'query');
+                activeOperation = 'submit';
+                showLoading(true, 'submit');
                 safeSet(PROMPT_DRAFT_KEY, prompt);
                 appendMessageToFeed({ role: 'user', content: prompt, timestamp: new Date().toISOString() });
-                const pendingAssistantId = appendTypingMessage('AI is thinking...');
+                promptInput.value = '';
+                safeSet(PROMPT_DRAFT_KEY, '');
+
+                const inferredIntent = inferDeterministicIntent({ prompt, selectedTemplateId, hasUploadedTemplate });
+                let intent = inferredIntent.intent;
+                let intentConfidence = inferredIntent.confidence;
+                let intentReason = inferredIntent.reason;
+
+                const looksTemplateRelated = /\b(fill|template|populate|report|cfir)\b/i.test(prompt);
+                if (intent === 'query' && looksTemplateRelated && !selectedTemplateId && !hasUploadedTemplate) {
+                    const classified = await classifyIntentFallback({
+                        prompt,
+                        hasSelectedTemplate: false,
+                        hasUploadedTemplate: false,
+                    });
+                    intent = classified.intent;
+                    intentConfidence = classified.confidence;
+                    intentReason = classified.reason;
+                }
+
+                traceState('intent-routing', {
+                    flowId,
+                    intent,
+                    intentConfidence,
+                    intentReason,
+                    selectedTemplateId,
+                    hasUploadedTemplate,
+                });
+
+                if (intent !== 'query' && intentConfidence < 0.65) {
+                    appendMessageToFeed({
+                        role: 'assistant',
+                        content: 'I can either answer your question or fill a template. Please confirm what you want me to do.',
+                        timestamp: new Date().toISOString(),
+                    });
+                    showLoading(false, 'submit');
+                    activeOperation = null;
+                    return;
+                }
+
+                if (intent === 'fill_template' && !selectedTemplateId && !hasUploadedTemplate) {
+                    const inferredTemplateId = resolveTemplateIdFromPrompt(prompt, availableTemplates);
+                    if (inferredTemplateId) {
+                        selectedTemplateId = inferredTemplateId;
+                        if (templateSelect) {
+                            templateSelect.value = inferredTemplateId;
+                        }
+                        safeSet(TEMPLATE_SELECTION_KEY, inferredTemplateId);
+                        traceState('template-auto-resolved', {
+                            flowId,
+                            inferredTemplateId,
+                        });
+                    }
+                }
+
+                if (intent === 'fill_template' && !selectedTemplateId && !hasUploadedTemplate) {
+                    appendMessageToFeed({
+                        role: 'assistant',
+                        content: 'I can fill a template, but none is selected. Choose a template from the selector or upload one for this prompt. I can also continue in Q&A mode if you prefer.',
+                        timestamp: new Date().toISOString(),
+                    });
+                    showLoading(false, 'submit');
+                    activeOperation = null;
+                    return;
+                }
+
+                const pendingAssistantId = appendTypingMessage(intent === 'fill_template' ? 'AI is filling the template...' : 'AI is thinking...');
 
                 const controller = new AbortController();
                 activeController = controller;
+                traceState('query-controller-created', { flowId });
 
                 try {
                     diagLog('log', 'submit fetch start', {
                         promptLength: prompt.length,
                         currentConversationId,
+                        intent,
                     });
-                    const response = await fetchWithStartupRetry(
-                        (requestSignal) => fetch(`${API_BASE}/query`, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
+                    let response;
+                    if (intent === 'fill_template') {
+                        response = await fetchWithStartupRetry(
+                            (requestSignal, requestTraceId) => {
+                                const formData = new FormData();
+                                formData.append('prompt', prompt);
+                                if (Number.isFinite(currentConversationId)) {
+                                    formData.append('conversation_id', String(currentConversationId));
+                                }
+                                if (selectedTemplateId) {
+                                    formData.append('template_id', selectedTemplateId);
+                                }
+                                if (uploadedTemplateFile) {
+                                    formData.append('file', uploadedTemplateFile);
+                                }
+                                return tracedFetch(`${API_BASE}/fill-template`, {
+                                    method: 'POST',
+                                    body: formData,
+                                    signal: requestSignal,
+                                }, {
+                                    flowId,
+                                    requestTraceId,
+                                    operation: 'fill-template',
+                                    conversationId: currentConversationId,
+                                });
                             },
-                            body: JSON.stringify({
-                                prompt,
-                                conversation_id: currentConversationId,
-                                temperature: 0.2,
+                            controller.signal,
+                            4,
+                            { flowId, operation: 'fill-template' },
+                        );
+                    } else {
+                        response = await fetchWithStartupRetry(
+                            (requestSignal, requestTraceId) => tracedFetch(`${API_BASE}/query`, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify({
+                                    prompt,
+                                    conversation_id: currentConversationId,
+                                    temperature: 0.2,
+                                }),
+                                signal: requestSignal,
+                            }, {
+                                flowId,
+                                requestTraceId,
+                                operation: 'query',
+                                conversationId: currentConversationId,
                             }),
-                            signal: requestSignal,
-                        }),
-                        controller.signal,
-                    );
+                            controller.signal,
+                            4,
+                            { flowId, operation: 'query' },
+                        );
+                    }
 
                     if (!response.ok) {
-                        throw new Error(`API error: ${response.status}`);
+                        const apiError = await extractApiErrorMessage(response, `API error: ${response.status}`);
+                        throw new Error(apiError);
                     }
 
                     diagLog('log', 'submit fetch success', { status: response.status });
 
                     const data = await response.json();
+                    traceState('query-response-json', {
+                        flowId,
+                        keys: Object.keys(data || {}),
+                        hasAnswer: Boolean(data?.answer),
+                        hasConversationId: typeof data?.conversation_id === 'number',
+                    });
                     if (typeof data.conversation_id === 'number') {
                         const previousConversationId = currentConversationId;
                         currentConversationId = data.conversation_id;
@@ -254,11 +568,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         role: 'assistant',
                         content: data.answer || 'Response received.',
                         timestamp: new Date().toISOString(),
+                        attachment_id: data.attachment_id,
+                        attachment_filename: data.attachment_filename,
                     });
 
                     await refreshConversations(currentConversationId);
-                    promptInput.value = '';
-                    safeSet(PROMPT_DRAFT_KEY, '');
+                    if (uploadedTemplateFile && templateFileInput) {
+                        templateFileInput.value = '';
+                        safeSet(TEMPLATE_FILENAME_KEY, '');
+                    }
+                    traceState('query-finished-success', { flowId, currentConversationId });
                 } catch (error) {
                     diagLog('error', 'submit fetch error', error);
                     removeTransientMessage(pendingAssistantId);
@@ -267,99 +586,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     } else {
                         showError(error.message || 'Unable to reach the CFIR API.');
                     }
+                    traceState('query-finished-error', {
+                        flowId,
+                        name: error?.name,
+                        message: error?.message,
+                    });
                 } finally {
-                    showLoading(false, 'query');
+                    showLoading(false, 'submit');
                     if (activeController === controller) {
                         activeController = null;
                     }
                     activeOperation = null;
+                    traceState('query-finally', { flowId, activeOperation, hasActiveController: Boolean(activeController) });
                 }
             } catch (error) {
                 diagLog('error', 'Submit handler error:', error);
                 showError('An unexpected error occurred. Please try again.');
-                showLoading(false, 'query');
+                showLoading(false, 'submit');
                 activeOperation = null;
                 activeController = null;
-            }
-        });
-    }
-
-    if (fillTemplateButton && templateFileInput && promptInput) {
-        fillTemplateButton.addEventListener('click', async () => {
-            if (activeOperation) {
-                if (activeOperation === 'query') {
-                    showError('A prompt request is running. Wait for it to finish or cancel it first.');
-                }
-                return;
-            }
-
-            if (!templateFileInput.files || !templateFileInput.files.length) {
-                showError('Please select a template file.');
-                return;
-            }
-
-            const file = templateFileInput.files[0];
-            const prompt = promptInput.value.trim();
-            if (!backendReady) {
-                showError('Backend is still starting. Please wait until status shows connected.');
-                return;
-            }
-            if (!prompt) {
-                showError('Please enter a prompt describing what to fill.');
-                return;
-            }
-
-            showError('');
-            activeOperation = 'template';
-            showLoading(true, 'template');
-            const userTemplateMessage = `Fill template request (${file.name}):\n${prompt}`;
-            appendMessageToFeed({ role: 'user', content: userTemplateMessage, timestamp: new Date().toISOString() });
-            const pendingTemplateId = appendTypingMessage('AI is filling the template...');
-            try {
-                const response = await fetchWithStartupRetry((requestSignal) => {
-                    const formData = new FormData();
-                    formData.append('file', file);
-                    formData.append('prompt', prompt);
-                    if (Number.isFinite(currentConversationId)) {
-                        formData.append('conversation_id', String(currentConversationId));
-                    }
-                    return fetch(`${API_BASE}/fill-template`, {
-                        method: 'POST',
-                        body: formData,
-                        signal: requestSignal,
-                    });
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(errorText || 'Template filling failed.');
-                }
-
-                const data = await response.json();
-                if (typeof data.conversation_id === 'number') {
-                    currentConversationId = data.conversation_id;
-                    persistActiveConversation(currentConversationId);
-                }
-
-                removeTransientMessage(pendingTemplateId);
-                appendMessageToFeed({
-                    role: 'assistant',
-                    content: data.answer || 'Template ready. Download from the attachment below.',
-                    timestamp: new Date().toISOString(),
-                    attachment_id: data.attachment_id,
-                    attachment_filename: data.attachment_filename,
-                });
-
-                templateFileInput.value = '';
-                safeSet(TEMPLATE_FILENAME_KEY, '');
-                showError('');
-                await refreshConversations(currentConversationId);
-            } catch (error) {
-                removeTransientMessage(pendingTemplateId);
-                showError(error.message || 'Template filling failed');
-            } finally {
-                showLoading(false, 'template');
-                activeOperation = null;
+                traceState('query-handler-crash', { flowId, message: error?.message });
             }
         });
     }
@@ -372,9 +618,13 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         try {
-            const response = await fetch(`${API_BASE}/conversations`, {
+            const response = await tracedFetch(`${API_BASE}/conversations`, {
                 method: 'GET',
                 cache: 'no-store',
+            }, {
+                flow: 'refresh-conversations',
+                preferredId,
+                currentConversationId,
             });
             if (!response.ok) {
                 diagLog('warn', 'refreshConversations fetch failed', { status: response.status });
@@ -395,8 +645,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (hasTarget) {
                 currentConversationId = targetId;
-            } else if (conversations.length > 0) {
-                currentConversationId = conversations[0].id;
             } else {
                 currentConversationId = null;
             }
@@ -420,9 +668,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadConversationMessages(conversationId) {
-        const response = await fetch(`${API_BASE}/conversations/${conversationId}/messages`, {
+        const response = await tracedFetch(`${API_BASE}/conversations/${conversationId}/messages`, {
             method: 'GET',
             cache: 'no-store',
+        }, {
+            flow: 'load-conversation-messages',
+            conversationId,
         });
 
         if (!response.ok) {
@@ -438,8 +689,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function removeConversation(conversationId) {
-        const response = await fetch(`${API_BASE}/conversations/${conversationId}`, {
+        const response = await tracedFetch(`${API_BASE}/conversations/${conversationId}`, {
             method: 'DELETE',
+        }, {
+            flow: 'remove-conversation',
+            conversationId,
         });
 
         if (!response.ok) {
@@ -552,6 +806,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        traceState('render-messages-start', {
+            reason,
+            conversationId,
+            allowClear,
+            incomingCount: messages.length,
+            currentConversationId,
+        });
+
         if (messages.length === 0 && currentConversationId !== null && !allowClear) {
             diagLog('warn', 'renderMessages skipped empty clear to preserve current conversation', {
                 currentConversationId,
@@ -562,6 +824,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         resultContainer.innerHTML = '';
+        traceState('render-messages-cleared-container', {
+            reason,
+            conversationId,
+            previousCount: resultContainer.childElementCount,
+        });
 
         if (messages.length === 0) {
             updateFeedPlaceholder();
@@ -586,6 +853,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!resultContainer) {
             return null;
         }
+
+        traceState('append-message', {
+            role: message.role,
+            isTyping: Boolean(message.isTyping),
+            hasAttachment: Boolean(message.attachment_id),
+            contentSize: String(message.content || '').length,
+            conversationId: currentConversationId,
+        });
 
         const role = message.role === 'assistant' ? 'assistant' : 'user';
         const wrapper = document.createElement('article');
@@ -676,106 +951,30 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showLoading(isLoading, operation = 'query') {
-        if (loadingIndicator) {
-            loadingIndicator.classList.toggle('hidden', !isLoading);
-        }
-        if (isLoading) {
-            startLoadingProgress(operation);
-        } else {
-            stopLoadingProgress();
-        }
+        traceState('show-loading', {
+            isLoading,
+            operation,
+            backendReady,
+            activeOperation,
+            currentConversationId,
+        });
         toggleSubmitState(isLoading, operation);
         updateFeedPlaceholder();
-    }
-
-    function startLoadingProgress(operation) {
-        loadingStartedAtMs = Date.now();
-
-        if (loadingProgressTrack) {
-            loadingProgressTrack.classList.remove('hidden');
-        }
-
-        if (loadingElapsedText) {
-            loadingElapsedText.classList.remove('hidden');
-        }
-
-        if (loadingElapsedText) {
-            const opLabel = operation === 'template' ? 'template fill' : 'response generation';
-            loadingElapsedText.textContent = `Waiting for ${opLabel}: 0s`;
-        }
-
-        if (loadingProgressFill) {
-            loadingProgressFill.style.width = '6%';
-        }
-
-        if (loadingElapsedInterval) {
-            window.clearInterval(loadingElapsedInterval);
-        }
-
-        loadingElapsedInterval = window.setInterval(() => {
-            const elapsedSeconds = Math.max(0, Math.floor((Date.now() - loadingStartedAtMs) / 1000));
-            if (loadingElapsedText) {
-                const opLabel = operation === 'template' ? 'template fill' : 'response generation';
-                loadingElapsedText.textContent = `Waiting for ${opLabel}: ${elapsedSeconds}s`;
-            }
-
-            if (loadingProgressFill) {
-                const percent = Math.min(95, 6 + (elapsedSeconds * 4));
-                loadingProgressFill.style.width = `${percent}%`;
-            }
-        }, 1000);
-    }
-
-    function stopLoadingProgress() {
-        if (loadingElapsedInterval) {
-            window.clearInterval(loadingElapsedInterval);
-            loadingElapsedInterval = null;
-        }
-
-        if (loadingProgressFill) {
-            loadingProgressFill.style.width = '100%';
-        }
-
-        if (loadingProgressTrack) {
-            window.setTimeout(() => {
-                if (!isProcessing && loadingProgressTrack) {
-                    loadingProgressTrack.classList.add('hidden');
-                    if (loadingProgressFill) {
-                        loadingProgressFill.style.width = '0%';
-                    }
-                }
-            }, 200);
-        }
-
-        if (loadingElapsedText) {
-            loadingElapsedText.textContent = 'Request completed.';
-            window.setTimeout(() => {
-                if (!isProcessing && loadingElapsedText) {
-                    loadingElapsedText.classList.add('hidden');
-                }
-            }, 600);
-        }
     }
 
     function toggleSubmitState(isLoading, operation) {
         isProcessing = isLoading;
         if (submitButton) {
-            const isQueryOperation = operation === 'query';
-            submitButton.setAttribute('data-state', isLoading && isQueryOperation ? 'cancel' : 'idle');
-            submitButton.setAttribute('aria-busy', String(isLoading && isQueryOperation));
-            submitButton.disabled = !backendReady || Boolean(isLoading && !isQueryOperation);
+            const isCancellableOperation = operation === 'query' || operation === 'submit';
+            submitButton.setAttribute('data-state', isLoading && isCancellableOperation ? 'cancel' : 'idle');
+            submitButton.setAttribute('aria-busy', String(isLoading && isCancellableOperation));
+            submitButton.disabled = !backendReady || Boolean(isLoading && !isCancellableOperation);
             if (submitSpinner) {
-                submitSpinner.classList.toggle('hidden', !(isLoading && isQueryOperation));
+                submitSpinner.classList.toggle('hidden', !(isLoading && isCancellableOperation));
             }
             if (submitLabel) {
-                submitLabel.textContent = isLoading && isQueryOperation ? 'Cancel' : 'Send prompt';
+                submitLabel.textContent = isLoading && isCancellableOperation ? 'Cancel' : 'Send prompt';
             }
-        }
-
-        if (fillTemplateButton) {
-            fillTemplateButton.disabled = !backendReady || isLoading;
-            fillTemplateButton.classList.toggle('opacity-60', isLoading);
-            fillTemplateButton.classList.toggle('cursor-not-allowed', isLoading);
         }
 
         if (templateFileInput) {
@@ -789,6 +988,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function pollBackendHealth() {
         logInit('pollBackendHealth start');
+        traceState('poll-backend-health-enter', { backendReady, windowBackendHealthy: window._backendHealthy });
         if (window._backendHealthy || backendReady) {
             window._backendHealthy = true;
             backendReady = true;
@@ -807,12 +1007,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (!window._backendHealthy && backendStatus) {
                     backendStatus.textContent = `Checking backend availability... (${attempt}/${maxAttempts})`;
                 }
-                const response = await fetch(`${API_BASE}/health`, {
+                const response = await tracedFetch(`${API_BASE}/health`, {
                     method: 'GET',
                     cache: 'no-store',
+                }, {
+                    flow: 'poll-backend-health',
+                    attempt,
+                    maxAttempts,
                 });
                 if (response.ok) {
                     const payload = await response.json();
+                    traceState('poll-backend-health-payload', { attempt, payload });
                     if (payload && payload.status === 'healthy' && payload.ready === true) {
                         window._backendHealthy = true;
                         setBackendReady(true, `Backend connected (v${payload.version || 'unknown'}).`);
@@ -840,6 +1045,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function setBackendReady(isReady, message) {
+        traceState('set-backend-ready-call', {
+            isReady,
+            message,
+            backendReady,
+            windowBackendHealthy: window._backendHealthy,
+        });
         if (!isReady && window._backendHealthy) {
             diagLog('warn', 'Ignored attempt to mark backend unready after healthy lock', { message });
             return;
@@ -868,11 +1079,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (submitButton) {
             submitButton.disabled = !isReady;
         }
-        if (fillTemplateButton) {
-            fillTemplateButton.disabled = !isReady;
-            fillTemplateButton.classList.toggle('opacity-60', !isReady);
-            fillTemplateButton.classList.toggle('cursor-not-allowed', !isReady);
-        }
         if (templateFileInput) {
             templateFileInput.disabled = !isReady;
         }
@@ -882,6 +1088,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showError(message) {
+        traceState('show-error', {
+            hasMessage: Boolean(message),
+            messageLength: String(message || '').length,
+            preview: String(message || '').slice(0, 120),
+            activeOperation,
+            backendReady,
+        });
         if (!errorContainer) {
             return;
         }
@@ -895,25 +1108,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
         errorContainer.textContent = message;
         errorContainer.classList.remove('hidden');
-        safeSet(ERROR_CACHE_KEY, message);
+        safeSet(ERROR_CACHE_KEY, shouldPersistError(message) ? message : '');
         updateFeedPlaceholder();
     }
 
-    async function fetchWithStartupRetry(requestFactory, signal, maxAttempts = 4) {
+    async function fetchWithStartupRetry(requestFactory, signal, maxAttempts = 4, meta = {}) {
+        if (typeof maxAttempts === 'object' && maxAttempts !== null) {
+            meta = maxAttempts;
+            maxAttempts = 4;
+        }
+
+        const normalizedAttempts = Number.isFinite(Number(maxAttempts)) && Number(maxAttempts) > 0
+            ? Math.floor(Number(maxAttempts))
+            : 4;
+
         let lastError = null;
-        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        for (let attempt = 1; attempt <= normalizedAttempts; attempt += 1) {
+            const requestTraceId = nextTraceId('req');
+            traceState('fetch-with-startup-retry-attempt', {
+                ...meta,
+                attempt,
+                maxAttempts: normalizedAttempts,
+                requestTraceId,
+                aborted: Boolean(signal?.aborted),
+            });
             if (signal?.aborted) {
                 throw new DOMException('The operation was aborted.', 'AbortError');
             }
 
             try {
-                const response = await fetchWithTimeout(requestFactory, QUERY_TIMEOUT_MS, signal);
+                const response = await fetchWithTimeout(
+                    (requestSignal) => requestFactory(requestSignal, requestTraceId),
+                    QUERY_TIMEOUT_MS,
+                    signal,
+                );
                 if (response.ok) {
+                    traceState('fetch-with-startup-retry-success', {
+                        ...meta,
+                        attempt,
+                        requestTraceId,
+                        status: response.status,
+                    });
                     return response;
                 }
 
-                if ([502, 503, 504].includes(response.status) && attempt < maxAttempts) {
-                    showError(`Backend is waking up... retry ${attempt}/${maxAttempts - 1}`);
+                if ([502, 503, 504].includes(response.status) && attempt < normalizedAttempts) {
+                    showError(`Backend is waking up... retry ${attempt}/${normalizedAttempts - 1}`);
                     await wait(900 * attempt);
                     continue;
                 }
@@ -925,9 +1165,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 lastError = error;
-                if (attempt < maxAttempts) {
+                traceState('fetch-with-startup-retry-error', {
+                    ...meta,
+                    attempt,
+                    requestTraceId,
+                    name: error?.name,
+                    message: error?.message,
+                });
+                if (attempt < normalizedAttempts) {
                     const statusHint = await detectBackendStatusHint();
-                    showError(`${statusHint} Retrying... (${attempt}/${maxAttempts - 1})`);
+                    showError(`${statusHint} Retrying... (${attempt}/${normalizedAttempts - 1})`);
                     await wait(900 * attempt);
                     continue;
                 }
@@ -970,7 +1217,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function detectBackendStatusHint() {
         try {
-            const response = await fetch(`${API_BASE}/health`, { method: 'GET', cache: 'no-store' });
+            const response = await tracedFetch(`${API_BASE}/health`, { method: 'GET', cache: 'no-store' }, {
+                flow: 'detect-backend-status-hint',
+            });
             if (!response.ok) {
                 return 'Backend is temporarily unreachable.';
             }
@@ -990,10 +1239,207 @@ document.addEventListener('DOMContentLoaded', () => {
         return 'Backend is still initializing.';
     }
 
+    function inferDeterministicIntent({ prompt, selectedTemplateId, hasUploadedTemplate }) {
+        const normalized = String(prompt || '').toLowerCase();
+        const hasTemplateSelected = Boolean(selectedTemplateId || hasUploadedTemplate);
+        const hasTemplateAction = /\b(fill|populate|complete|draft|generate|create)\b/.test(normalized);
+        const hasTemplateTarget = /\b(template|report|cfir|form)\b/.test(normalized);
+
+        if (hasTemplateAction && hasTemplateTarget) {
+            return {
+                intent: 'fill_template',
+                confidence: hasTemplateSelected ? 0.95 : 0.85,
+                reason: hasTemplateSelected
+                    ? 'explicit fill intent with selected template'
+                    : 'explicit fill intent keywords',
+            };
+        }
+
+        if (hasTemplateSelected && hasTemplateTarget) {
+            return {
+                intent: 'fill_template',
+                confidence: 0.78,
+                reason: 'template target mentioned with selected template',
+            };
+        }
+
+        return {
+            intent: 'query',
+            confidence: 0.8,
+            reason: hasTemplateSelected
+                ? 'selected template ignored because prompt is regular Q&A'
+                : 'deterministic query routing',
+        };
+    }
+
+    async function classifyIntentFallback({ prompt, hasSelectedTemplate, hasUploadedTemplate }) {
+        try {
+            const response = await tracedFetch(`${API_BASE}/classify-intent`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    prompt,
+                    has_selected_template: Boolean(hasSelectedTemplate),
+                    has_uploaded_template: Boolean(hasUploadedTemplate),
+                }),
+            }, {
+                flow: 'classify-intent-fallback',
+            });
+
+            if (!response.ok) {
+                return {
+                    intent: 'query',
+                    confidence: 0.6,
+                    reason: `classifier HTTP ${response.status}`,
+                };
+            }
+
+            const payload = await response.json();
+            const intent = payload?.intent === 'fill_template' ? 'fill_template' : 'query';
+            const confidence = Number(payload?.confidence);
+            const normalizedConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0.6;
+            return {
+                intent,
+                confidence: normalizedConfidence,
+                reason: String(payload?.reason || 'classifier fallback'),
+            };
+        } catch (error) {
+            traceState('classify-intent-fallback-error', {
+                message: error?.message,
+                name: error?.name,
+            });
+            return {
+                intent: 'query',
+                confidence: 0.6,
+                reason: 'classifier unavailable',
+            };
+        }
+    }
+
+    async function loadTemplateOptions() {
+        if (!templateSelect || !backendReady) {
+            return;
+        }
+
+        const cachedSelection = String(safeGet(TEMPLATE_SELECTION_KEY) || '').trim();
+        const previousSelection = String(templateSelect.value || '').trim();
+        const preferredSelection = previousSelection || cachedSelection;
+
+        try {
+            const response = await tracedFetch(`${API_BASE}/templates`, {
+                method: 'GET',
+                cache: 'no-store',
+            }, {
+                flow: 'load-template-options',
+            });
+
+            if (!response.ok) {
+                throw new Error(`Unable to load templates (${response.status})`);
+            }
+
+            const templates = await response.json();
+            if (!Array.isArray(templates)) {
+                availableTemplates = [];
+                return;
+            }
+
+            availableTemplates = templates;
+
+            templateSelect.innerHTML = '';
+
+            const emptyOption = document.createElement('option');
+            emptyOption.value = '';
+            emptyOption.textContent = 'No template selected';
+            templateSelect.appendChild(emptyOption);
+
+            let selectedStillExists = false;
+
+            templates.forEach((template) => {
+                if (!template || !template.id) {
+                    return;
+                }
+
+                const option = document.createElement('option');
+                option.value = String(template.id);
+                const isDefault = Boolean(template.is_default);
+                const isActive = template.active !== false;
+                const name = String(template.name || template.filename || 'Unnamed template');
+                option.textContent = isDefault ? `${name} (default)` : name;
+                option.disabled = !isActive;
+                templateSelect.appendChild(option);
+
+                if (option.value === preferredSelection) {
+                    selectedStillExists = true;
+                }
+            });
+
+            const nextSelection = selectedStillExists
+                ? preferredSelection
+                : '';
+            templateSelect.value = nextSelection;
+            safeSet(TEMPLATE_SELECTION_KEY, nextSelection);
+
+            traceState('load-template-options-success', {
+                templateCount: templates.length,
+                selectedTemplateId: nextSelection,
+            });
+        } catch (error) {
+            availableTemplates = [];
+            traceState('load-template-options-error', {
+                message: error?.message,
+                name: error?.name,
+            });
+        }
+    }
+
     function wait(ms) {
         return new Promise((resolve) => {
             window.setTimeout(resolve, ms);
         });
+    }
+
+    function resolveTemplateIdFromPrompt(prompt, templates) {
+        const normalizedPrompt = normalizeTemplateLookupText(prompt);
+        if (!normalizedPrompt || !Array.isArray(templates) || templates.length === 0) {
+            return '';
+        }
+
+        let bestTemplateId = '';
+        let bestMatchLength = 0;
+
+        templates.forEach((template) => {
+            if (!template || !template.id || template.active === false) {
+                return;
+            }
+
+            const rawFilename = String(template.filename || '');
+            const filenameStem = rawFilename.replace(/\.[^.]+$/, '');
+            const candidates = [template.name, rawFilename, filenameStem]
+                .map((value) => normalizeTemplateLookupText(value))
+                .filter((value, index, arr) => value.length >= 3 && arr.indexOf(value) === index);
+
+            candidates.forEach((candidate) => {
+                if (!normalizedPrompt.includes(candidate)) {
+                    return;
+                }
+                if (candidate.length > bestMatchLength) {
+                    bestMatchLength = candidate.length;
+                    bestTemplateId = String(template.id);
+                }
+            });
+        });
+
+        return bestTemplateId;
+    }
+
+    function normalizeTemplateLookupText(value) {
+        return String(value || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
     }
 
     function restoreDraftState() {
@@ -1017,45 +1463,45 @@ document.addEventListener('DOMContentLoaded', () => {
         updateFeedPlaceholder();
     }
 
+    function startFreshSession() {
+        safeSet(PROMPT_DRAFT_KEY, '');
+        safeSet(ERROR_CACHE_KEY, '');
+        safeSet(TEMPLATE_FILENAME_KEY, '');
+        safeSet(TEMPLATE_SELECTION_KEY, '');
+        persistActiveConversation(null);
+        currentConversationId = null;
+        if (templateSelect) {
+            templateSelect.value = '';
+        }
+        renderMessages([], { allowClear: true, reason: 'fresh-session-load' });
+    }
+
+    function consumeFreshSessionFlag() {
+        try {
+            const params = new URLSearchParams(window.location.search || '');
+            if (params.get(LOGIN_FRESH_FLAG) !== '1') {
+                return false;
+            }
+
+            params.delete(LOGIN_FRESH_FLAG);
+            const nextQuery = params.toString();
+            const nextUrl = `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`;
+            window.history.replaceState({}, document.title, nextUrl);
+            return true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     function ensureStatusContainers() {
         if (!promptForm) {
             return;
         }
 
-        if (!loadingIndicator) {
-            loadingIndicator = document.createElement('div');
-            loadingIndicator.id = 'loading-indicator';
-            loadingIndicator.className = 'hidden mt-2 text-sm text-slate-500 dark:text-slate-300';
-            loadingIndicator.textContent = 'Processing request...';
-            promptForm.prepend(loadingIndicator);
-        }
-
-        if (!loadingProgressTrack) {
-            loadingProgressTrack = document.createElement('div');
-            loadingProgressTrack.id = 'loading-progress-track';
-            loadingProgressTrack.className = 'hidden mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-200/80 dark:bg-slate-700/70';
-
-            loadingProgressFill = document.createElement('div');
-            loadingProgressFill.id = 'loading-progress-fill';
-            loadingProgressFill.className = 'h-full rounded-full bg-emerald-500 transition-all duration-500 ease-linear';
-            loadingProgressFill.style.width = '0%';
-
-            loadingProgressTrack.appendChild(loadingProgressFill);
-            promptForm.prepend(loadingProgressTrack);
-        }
-
-        if (!loadingElapsedText) {
-            loadingElapsedText = document.createElement('p');
-            loadingElapsedText.id = 'loading-elapsed';
-            loadingElapsedText.className = 'hidden mt-1 text-xs text-slate-500 dark:text-slate-300';
-            loadingElapsedText.textContent = '';
-            promptForm.prepend(loadingElapsedText);
-        }
-
-        if (loadingIndicator) {
-            const isHidden = loadingIndicator.classList.contains('hidden');
-            loadingElapsedText.classList.toggle('hidden', isHidden);
-        }
+        loadingIndicator = null;
+        loadingProgressTrack = null;
+        loadingProgressFill = null;
+        loadingElapsedText = null;
 
         if (!errorContainer) {
             errorContainer = document.createElement('div');
